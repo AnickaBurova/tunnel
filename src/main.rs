@@ -53,10 +53,9 @@ fn main() {
                         use std::str::FromStr;
                         use aws_sdk_rust::aws::common::region::Region;
                         Region::from_str(region)
-                            .and_then(|_region| {
+                            .and_then(|region| {
                                 use aws_sdk_rust::aws::s3::endpoint::{Endpoint, Signature};
-                                //Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
-                                Ok(Endpoint::new(Region::UsEast1, Signature::V4, None, None, None, None))
+                                Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
                             })
                             .and_then(|endpoint| {
                                 use aws_sdk_rust::aws::s3::s3client::S3Client;
@@ -66,38 +65,17 @@ fn main() {
                     })
             })
             .and_then(|client| {
-                client.list_buckets()
-                    .and_then(|buckets| {
-                        println!("{:#?}", buckets);
-                        Ok(())
-                    })
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+                use aws_sdk_rust::aws::s3::object::GetObjectRequest;
+                let mut object = GetObjectRequest::default();
+                object.bucket = "imsdistributionfiles".to_string();
+                object.key = "exchange/walm-com.dat".to_string();
+                use std::str;
+                match client.get_object(&object, None) {
+                    Ok(output) => println!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
+                    Err(e) => println!( "{:#?}", e),
+                }
+                Ok(())
             })
         })
-    //let _ = load_credentials()
-        //.and_then(|(credentials, region)| {
-            //Ok(())
-            ////region
-                ////.parse()
-                ////.map_err(|_| {
-                    ////io::Error::new(io::ErrorKind::InvalidData, "Failed to parse region")
-                ////})
-                ////.and_then(|region| {
-                    ////Ok(Bucket::new("imsdistributionfiles", region, credentials))
-                ////})
-        //})
-        //.and_then(|bucket| {
-            //Ok(())
-            //bucket
-                //.list("/exchange", None)
-                //.and_then(|(list, code)| {
-                    //println!("code = {}\nlist = {:?}", code, list);
-                    //Ok(())
-                //})
-                //.map_err(|err| {
-                    //println!("failed: {}", err.description());
-                    //io::Error::new(io::ErrorKind::InvalidData, err.description().to_owned())
-                //})
-        //})
         .unwrap();
 }
