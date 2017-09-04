@@ -16,89 +16,38 @@ extern crate tokio_service;
 
 use std::io::{self};
 
-pub struct LineCodec;
+pub struct RawCodec;
 
 use tokio_io::codec::{Encoder, Decoder};
 use bytes::BytesMut;
 
-impl Decoder for LineCodec {
-    type Item = String;
+impl Decoder for RawCodec {
+    type Item = Vec<u8>;
     type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<String>> {
-        if let Some(i) = buf.iter().position(|&b| b == b'\n') {
-            // remove the serialized frame from the buffer.
-            let line = buf.split_to(i);
-
-            // Also remove the '\n'
-            //buf.split_to(1);
-
-            // Turn this data into a UTF string and return it in a Frame.
-            use std::str;
-            match str::from_utf8(&line) {
-                Ok(s) => Ok(Some(s.to_string())),
-                Err(_) => Err(io::Error::new(io::ErrorKind::Other,
-                                             "invalid UTF-8")),
-            }
+    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Self::Item>> {
+        if buf.len() > 0 {
+            let size = buf.len();
+            let line = buf.split_to(size);
+            Ok(Some(line.to_vec()))
         } else {
             Ok(None)
         }
     }
 }
 
-impl Encoder for LineCodec {
-    type Item = String;
+impl Encoder for RawCodec {
+    type Item = Vec<u8>;
     type Error = io::Error;
 
-    fn encode(&mut self, msg: String, buf: &mut BytesMut) -> io::Result<()> {
-        buf.extend(msg.as_bytes());
-        //buf.extend(b"\n");
+    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
+        buf.extend(msg);
         Ok(())
     }
 }
 
-pub struct LineProto;
-
-use tokio_proto::pipeline::ServerProto;
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::codec::Framed;
-
-impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for LineProto {
-    /// For this protocol style, `Request` matches the `Item` type of the codec's `Decoder`
-    type Request = String;
-
-    /// For this protocol style, `Response` matches the `Item` type of the codec's `Encoder`
-    type Response = String;
-
-    /// A bit of boilerplate to hook in the codec:
-    type Transport = Framed<T, LineCodec>;
-    type BindTransport = Result<Self::Transport, io::Error>;
-    fn bind_transport(&self, io: T) -> Self::BindTransport {
-        Ok(io.framed(LineCodec))
-    }
-}
-
-use tokio_service::Service;
-pub struct Echo;
+use tokio_io::{AsyncRead};
 use futures::{future, Future};
-
-impl Service for Echo {
-    // These types must match the corresponding protocol types:
-    type Request = String;
-    type Response = String;
-
-    // For non-streaming protocols, service errors are always io::Error
-    type Error = io::Error;
-
-    // The future for computing the response; box it for simplicity.
-    type Future = Box<Future<Item = Self::Response, Error =  Self::Error>>;
-
-    // Produce a future for computing a response from a request.
-    fn call(&self, req: Self::Request) -> Self::Future {
-        // In this case, the response is immediate.
-        Box::new(future::ok(req))
-    }
-}
 
 fn s3run() -> io::Result<()> {
     use ini::Ini;
@@ -194,25 +143,40 @@ fn main() {
         .incoming()
         .for_each(move |(socket, _peer_addr)| {
             println!("server: connected");
-            let (writer, reader) = socket.framed(LineCodec).split();
-            use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+            let (writer, reader) = socket.framed(RawCodec).split();
             //let address = "192.168.1.10:22".parse().unwrap();
-            let address = "10.10.101.146:1234".parse().unwrap();
+            //
+            let address = "10.10.101.146:22".parse().unwrap();
             use tokio_core::net::TcpStream;
             let client = TcpStream::connect(&address, &handle);
             let handle = handle.clone();
             client.and_then(move |socket| {
-                let (writer2, reader2) = socket.framed(LineCodec).split();
+                let (writer2, reader2) = socket.framed(RawCodec).split();
                 println!("client: connected");
                 use futures::Sink;
+                use std::str;
                 let reader2 = reader2
                     .and_then(|data| {
-                        println!("client: {}", data);
+                        match str::from_utf8(&data) {
+                            Ok(s) => {
+                                println!("client: {}", s);
+                            }
+                            Err(_) => {
+                                println!("client: {}", data.len());
+                            }
+                        }
                         Box::new(future::ok(data))
                     });
                 let reader = reader
                     .and_then(|data| {
-                        println!("server: {}", data);
+                        match str::from_utf8(&data) {
+                            Ok(s) => {
+                                println!("server: {}", s);
+                            }
+                            Err(_) => {
+                                println!("server: {}", data.len());
+                            }
+                        }
                         Box::new(future::ok(data))
                     });
                 let server = writer.send_all(reader2).then(|_|Ok(()));
@@ -222,5 +186,5 @@ fn main() {
                 Ok(())
             })
         });
-    core.run(server);
+    let _ = core.run(server);
 }
