@@ -1,0 +1,6 @@
+/target/
+**/*.rs.bk
+.vimrc
+.*.sw[op]
+.versionrc
+.version_upgrade
