@@ -18,6 +18,7 @@ fn main() {
             io::Error::new(io::ErrorKind::InvalidData, err)
         })
         .and_then(|cfg| {
+            // read s3 configuration from config file.
             cfg.section(Some("default".to_owned()))
                 .ok_or(io::Error::new(io::ErrorKind::InvalidData, "Cannot read default section"))
                 .and_then(|section| {
@@ -39,6 +40,7 @@ fn main() {
                         })
                 })
             .and_then(|(access_key, secret_key, region)| {
+                // create connection to s3
                 println!("{}\n{}\n{}", access_key, secret_key, region);
                 use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
                 ParametersProvider::with_parameters(
@@ -65,10 +67,21 @@ fn main() {
                     })
             })
             .and_then(|client| {
+                let bucket_name = "imsdistributionfiles";
+                use aws_sdk_rust::aws::s3::object::PutObjectRequest;
+                let mut object = PutObjectRequest::default();
+                object.bucket = bucket_name.to_string();
+                object.key = "exchange/wal-com.in".to_string();
+                object.body = Some(b"this is a test.");
+                match client.put_object(&object, None) {
+                    Ok(output) => println!( "{:#?}", output),
+                    Err(e) => println!("{:#?}", e),
+                }
+                // read s3 files
                 use aws_sdk_rust::aws::s3::object::GetObjectRequest;
                 let mut object = GetObjectRequest::default();
-                object.bucket = "imsdistributionfiles".to_string();
-                object.key = "exchange/walm-com.dat".to_string();
+                object.bucket = bucket_name.to_string();
+                object.key = "exchange/wal-com.out".to_string();
                 use std::str;
                 match client.get_object(&object, None) {
                     Ok(output) => println!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
