@@ -4,3 +4,4 @@
 .*.sw[op]
 .versionrc
 .version_upgrade
+log/

@@ -13,6 +13,11 @@ extern crate tokio_io;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+#[macro_use]
+extern crate clap;
+#[macro_use]
+extern crate log;
+extern crate log4rs;
 
 use std::io::{self};
 
@@ -36,10 +41,10 @@ impl Decoder for RawCodec {
             use std::str;
             match str::from_utf8(&line) {
                 Ok(s) => {
-                    println!("{}[{}]: {}", self.name, self.id, s);
+                    info!("{}[{}]: {}", self.name, self.id, s);
                 }
                 Err(_) => {
-                    println!("{}[{}]: {}", self.name, self.id, line.len());
+                    info!("{}[{}]: {}", self.name, self.id, line.len());
                 }
             }
             Ok(Some(line))
@@ -92,7 +97,7 @@ fn s3run() -> io::Result<()> {
                 })
             .and_then(|(access_key, secret_key, region)| {
                 // create connection to s3
-                println!("{}\n{}\n{}", access_key, secret_key, region);
+                info!("{}\n{}\n{}", access_key, secret_key, region);
                 use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
                 ParametersProvider::with_parameters(
                     access_key.to_owned(),
@@ -125,8 +130,8 @@ fn s3run() -> io::Result<()> {
                 object.key = "exchange/tunnel.in".to_string();
                 object.body = Some(b"this is a test.");
                 match client.put_object(&object, None) {
-                    Ok(output) => println!( "{:#?}", output),
-                    Err(e) => println!("{:#?}", e),
+                    Ok(output) => info!( "{:#?}", output),
+                    Err(e) => info!("{:#?}", e),
                 }
                 // read s3 files
                 use aws_sdk_rust::aws::s3::object::GetObjectRequest;
@@ -135,8 +140,8 @@ fn s3run() -> io::Result<()> {
                 object.key = "exchange/tunnel.out".to_string();
                 use std::str;
                 match client.get_object(&object, None) {
-                    Ok(output) => println!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
-                    Err(e) => println!( "{:#?}", e),
+                    Ok(output) => info!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
+                    Err(e) => info!( "{:#?}", e),
                 }
                 Ok(())
             })
@@ -144,8 +149,27 @@ fn s3run() -> io::Result<()> {
 }
 
 fn main() {
+    use clap::{App,Arg};
+    let matches = App::new(env!("CARGO_PKG_NAME"))
+        .version(crate_version!())
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .arg(Arg::with_name("log-config")
+             .long("log-config")
+             .help("Log configuration")
+             .takes_value(true)
+             .default_value("log.yaml")
+            )
+        .arg(Arg::with_name("port")
+             .long("port")
+             .short("p")
+             .takes_value(true)
+             .default_value("1234")
+             .validator(|val| val.parse::<u16>().map(|_| ()).map_err(|_| format!("Cannot parse {} to u16", val))))
+        .get_matches();
+    let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
     //let _ = s3run().unwrap();
-    let address = format!("0.0.0.0:{}", Some("1234").unwrap()).parse().unwrap();
+    let address = format!("0.0.0.0:{}", &matches.value_of("port").unwrap()).parse().unwrap();
     use tokio_core::reactor::Core;
     let mut core = Core::new().unwrap();
     let handle = core.handle();
@@ -155,7 +179,7 @@ fn main() {
     let server = listener
         .incoming()
         .for_each(move |(socket, _peer_addr)| {
-            println!("server: connected");
+            info!("server: connected");
             let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
             //let address = "192.168.1.10:22".parse().unwrap();
             //
@@ -165,7 +189,7 @@ fn main() {
             let handle = handle.clone();
             client.and_then(move |socket| {
                 let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
-                println!("client: connected");
+                info!("client: connected");
                 use futures::Sink;
                 let server = writer.send_all(reader2).then(|_|Ok(()));
                 let client = writer2.send_all(reader).then(|_|Ok(()));

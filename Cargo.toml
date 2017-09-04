@@ -1,7 +1,8 @@
 [package]
 name = "tunnel"
 version = "0.1.0"
-authors = ["milan"]
+authors = ["Anicka Burova <anicka.burova@gmail.com>"]
+description = "Tunnel over various methods"
 
 [dependencies]
 aws-sdk-rust = "*"
@@ -13,3 +14,7 @@ tokio-io = "0.1"
 tokio-core = "0.1"
 tokio-proto = "0.1"
 tokio-service = "0.1"
+
+clap = "2"
+log = "0.3"
+log4rs = "0.7"
