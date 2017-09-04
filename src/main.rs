@@ -16,7 +16,10 @@ extern crate tokio_service;
 
 use std::io::{self};
 
-pub struct RawCodec;
+pub struct RawCodec {
+    pub id: u64,
+    pub name: String,
+}
 
 use tokio_io::codec::{Encoder, Decoder};
 use bytes::BytesMut;
@@ -28,8 +31,18 @@ impl Decoder for RawCodec {
     fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Self::Item>> {
         if buf.len() > 0 {
             let size = buf.len();
-            let line = buf.split_to(size);
-            Ok(Some(line.to_vec()))
+            let line = buf.split_to(size).to_vec();
+            self.id += 1;
+            use std::str;
+            match str::from_utf8(&line) {
+                Ok(s) => {
+                    println!("{}[{}]: {}", self.name, self.id, s);
+                }
+                Err(_) => {
+                    println!("{}[{}]: {}", self.name, self.id, line.len());
+                }
+            }
+            Ok(Some(line))
         } else {
             Ok(None)
         }
@@ -47,7 +60,7 @@ impl Encoder for RawCodec {
 }
 
 use tokio_io::{AsyncRead};
-use futures::{future, Future};
+use futures::{Future};
 
 fn s3run() -> io::Result<()> {
     use ini::Ini;
@@ -143,7 +156,7 @@ fn main() {
         .incoming()
         .for_each(move |(socket, _peer_addr)| {
             println!("server: connected");
-            let (writer, reader) = socket.framed(RawCodec).split();
+            let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
             //let address = "192.168.1.10:22".parse().unwrap();
             //
             let address = "10.10.101.146:22".parse().unwrap();
@@ -151,34 +164,9 @@ fn main() {
             let client = TcpStream::connect(&address, &handle);
             let handle = handle.clone();
             client.and_then(move |socket| {
-                let (writer2, reader2) = socket.framed(RawCodec).split();
+                let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
                 println!("client: connected");
                 use futures::Sink;
-                use std::str;
-                let reader2 = reader2
-                    .and_then(|data| {
-                        match str::from_utf8(&data) {
-                            Ok(s) => {
-                                println!("client: {}", s);
-                            }
-                            Err(_) => {
-                                println!("client: {}", data.len());
-                            }
-                        }
-                        Box::new(future::ok(data))
-                    });
-                let reader = reader
-                    .and_then(|data| {
-                        match str::from_utf8(&data) {
-                            Ok(s) => {
-                                println!("server: {}", s);
-                            }
-                            Err(_) => {
-                                println!("server: {}", data.len());
-                            }
-                        }
-                        Box::new(future::ok(data))
-                    });
                 let server = writer.send_all(reader2).then(|_|Ok(()));
                 let client = writer2.send_all(reader).then(|_|Ok(()));
                 handle.spawn(server);
