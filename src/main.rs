@@ -31,7 +31,7 @@ impl Decoder for LineCodec {
             let line = buf.split_to(i);
 
             // Also remove the '\n'
-            buf.split_to(1);
+            //buf.split_to(1);
 
             // Turn this data into a UTF string and return it in a Frame.
             use std::str;
@@ -52,7 +52,7 @@ impl Encoder for LineCodec {
 
     fn encode(&mut self, msg: String, buf: &mut BytesMut) -> io::Result<()> {
         buf.extend(msg.as_bytes());
-        buf.extend(b"\n");
+        //buf.extend(b"\n");
         Ok(())
     }
 }
@@ -196,20 +196,27 @@ fn main() {
             println!("server: connected");
             let (writer, reader) = socket.framed(LineCodec).split();
             use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-            let address = "79.70.25.97:22".parse().unwrap();
+            //let address = "192.168.1.10:22".parse().unwrap();
+            let address = "10.10.101.146:1234".parse().unwrap();
             use tokio_core::net::TcpStream;
             let client = TcpStream::connect(&address, &handle);
-            client.and_then(|socket| {
+            let handle = handle.clone();
+            client.and_then(move |socket| {
                 let (writer2, reader2) = socket.framed(LineCodec).split();
                 println!("client: connected");
                 use futures::Sink;
+                let reader2 = reader2
+                    .and_then(|data| {
+                        println!("client: {}", data);
+                        Box::new(future::ok(data))
+                    });
+                let reader = reader
+                    .and_then(|data| {
+                        println!("server: {}", data);
+                        Box::new(future::ok(data))
+                    });
                 let server = writer.send_all(reader2).then(|_|Ok(()));
                 let client = writer2.send_all(reader).then(|_|Ok(()));
-                //let server_reads = reader
-                    //.and_then(move |req| {
-
-                    //})
-
                 handle.spawn(server);
                 handle.spawn(client);
                 Ok(())
