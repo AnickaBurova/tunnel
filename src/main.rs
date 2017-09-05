@@ -7,19 +7,39 @@
  */
 extern crate aws_sdk_rust;
 extern crate ini;
+
 extern crate bytes;
 extern crate futures;
+
 extern crate tokio_io;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+
 #[macro_use]
 extern crate clap;
+
 #[macro_use]
 extern crate log;
 extern crate log4rs;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_yaml;
+
 use std::io::{self};
+
+#[derive (Debug, Serialize, Deserialize)]
+enum Payload {
+    Command(String),
+    Data(String),
+}
+
+#[derive (Debug, Serialize, Deserialize)]
+struct Message {
+    pub id: u8,
+    pub payload: Payload,
+}
 
 pub struct RawCodec {
     pub id: u64,
@@ -91,111 +111,109 @@ impl UdpCodec for RawCodec {
     }
 }
 
+macro_rules! io_res {
+    ($e: expr) => {
+        $e.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    };
+    ($e: expr, $k: ident) => {
+        $e.map_err(|e| io::Error::new(io::ErrorKind::$k, e))
+    };
+    (opt => $e: expr, $msg: expr) => {
+        $e.ok_or(io::Error::new(io::ErrorKind::Other, $msg))
+    };
+    (opt => $e: expr, $k: ident, $msg: expr) => {
+        $e.ok_or(io::Error::new(io::ErrorKind::$k, $msg))
+    };
+}
+
 use tokio_io::{AsyncRead};
 use futures::{Future};
 
-fn s3run() -> io::Result<()> {
-    use ini::Ini;
-    Ini::load_from_file("/home/anca/.s3cfg")
-        .map_err(|err| {
-            io::Error::new(io::ErrorKind::InvalidData, err)
+fn s3run(matches: &ArgMatches) -> io::Result<()> {
+    #[derive (Debug, Serialize, Deserialize)]
+    struct S3Config {
+        pub access_key: String,
+        pub bucket_name: String,
+        pub bucket_prefix: String,
+        pub bucket_location: String,
+        pub secret_key: String,
+    }
+
+    let mode = &matches.value_of("mode").unwrap();
+
+    use std::collections::BTreeMap;
+    use std::fs::File;
+    use std::io::Read;
+    File::open("tunnel.cfg")
+        .and_then(|file| {
+            io_res!(serde_yaml::from_reader::<_,S3Config>(file), InvalidData)
         })
         .and_then(|cfg| {
-            // read s3 configuration from config file.
-            cfg.section(Some("default".to_owned()))
-                .ok_or(io::Error::new(io::ErrorKind::InvalidData, "Cannot read default section"))
-                .and_then(|section| {
-                    section.get("access_key")
-                        .ok_or(io::Error::new(io::ErrorKind::InvalidData, "Cannot read access_key value"))
-                        .and_then(|access_key| {
-                            section.get("secret_key")
-                                .ok_or(io::Error::new(io::ErrorKind::InvalidData, "Cannot read secret_key value"))
-                                .and_then(|secret_key| {
-                                    Ok((access_key, secret_key))
-                                })
-                        })
-                        .and_then(|(access_key, secret_key)| {
-                            section.get("bucket_location")
-                                .ok_or(io::Error::new(io::ErrorKind::InvalidData, "Cannot read bucket_location value"))
-                                .and_then(|region| {
-                                    Ok((access_key, secret_key, region))
-                                })
-                        })
+            // create connection to s3
+            let access_key = cfg.access_key;
+            let bucket_name = cfg.bucket_name;
+            let bucket_prefix = cfg.bucket_prefix;
+            let bucket_location = cfg.bucket_location;
+            let secret_key = cfg.secret_key;
+            use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
+            ParametersProvider::with_parameters(
+                access_key,
+                secret_key,
+                None)
+                .and_then(|credentials| {
+                    DefaultCredentialsProvider::new(Some(credentials))
                 })
-            .and_then(|(access_key, secret_key, region)| {
-                // create connection to s3
-                info!("{}\n{}\n{}", access_key, secret_key, region);
-                use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
-                ParametersProvider::with_parameters(
-                    access_key.to_owned(),
-                    secret_key.to_owned(),
-                    None)
-                    .and_then(|credentials| {
-                        DefaultCredentialsProvider::new(Some(credentials))
-                    })
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-                    .and_then(|provider| {
-                        use std::str::FromStr;
-                        use aws_sdk_rust::aws::common::region::Region;
-                        Region::from_str(region)
-                            .and_then(|region| {
-                                use aws_sdk_rust::aws::s3::endpoint::{Endpoint, Signature};
-                                Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
-                            })
-                            .and_then(|endpoint| {
-                                use aws_sdk_rust::aws::s3::s3client::S3Client;
-                                Ok(S3Client::new(provider, endpoint))
-                            })
-                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-                    })
-            })
-            .and_then(|client| {
-                let bucket_name = "bucket_name";
-                use aws_sdk_rust::aws::s3::object::PutObjectRequest;
-                let mut object = PutObjectRequest::default();
-                object.bucket = bucket_name.to_string();
-                object.key = "exchange/tunnel.in".to_string();
-                object.body = Some(b"this is a test.");
-                match client.put_object(&object, None) {
-                    Ok(output) => info!( "{:#?}", output),
-                    Err(e) => info!("{:#?}", e),
-                }
-                // read s3 files
-                use aws_sdk_rust::aws::s3::object::GetObjectRequest;
-                let mut object = GetObjectRequest::default();
-                object.bucket = bucket_name.to_string();
-                object.key = "exchange/tunnel.out".to_string();
-                use std::str;
-                match client.get_object(&object, None) {
-                    Ok(output) => info!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
-                    Err(e) => info!( "{:#?}", e),
-                }
-                Ok(())
-            })
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+                .and_then(|provider| {
+                    use std::str::FromStr;
+                    use aws_sdk_rust::aws::common::region::Region;
+                    Region::from_str(&bucket_location)
+                        .and_then(|region| {
+                            use aws_sdk_rust::aws::s3::endpoint::{Endpoint, Signature};
+                            Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
+                        })
+                        .and_then(|endpoint| {
+                            use aws_sdk_rust::aws::s3::s3client::S3Client;
+                            Ok((S3Client::new(provider, endpoint),bucket_name, bucket_prefix))
+                        })
+                        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+                })
+        })
+        .and_then(|(client, bucket_name, bucket_prefix)| {
+            let (mut stream_in, mut stream_out) = {
+                let (name_in, name_out) = if mode == &"server" {
+                    (format!("{}/tunnel.in", bucket_prefix), format!("{}/tunnel.out", bucket_prefix))
+                } else {
+                    (format!("{}/tunnel.out", bucket_prefix), format!("{}/tunnel.in", bucket_prefix))
+                };
+                let mut stream_in = PutObjectRequest::default();
+                stream_in.bucket = bucket_name.clone();
+                stream_in.key = name_in;
+                let mut stream_out = GetObjectRequest::default();
+                stream_out.bucket = bucket_name.clone();
+                stream_out.key = name_out;
+                (stream_in, stream_out)
+            };
+            use aws_sdk_rust::aws::s3::object::PutObjectRequest;
+            stream_in.body = Some(b"this is stream_in");
+            match client.put_object(&stream_in, None) {
+                Ok(output) => info!( "{:#?}", output),
+                Err(e) => info!("{:#?}", e),
+            }
+            // read s3 files
+            use aws_sdk_rust::aws::s3::object::GetObjectRequest;
+            use std::str;
+            match client.get_object(&stream_out, None) {
+                Ok(output) => info!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
+                Err(e) => info!( "{:#?}", e),
+            }
+            Ok(())
         })
 }
 
-fn main() {
-    use clap::{App,Arg};
-    let matches = App::new(env!("CARGO_PKG_NAME"))
-        .version(crate_version!())
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .arg(Arg::with_name("log-config")
-             .long("log-config")
-             .help("Log configuration")
-             .takes_value(true)
-             .default_value("log.yaml")
-            )
-        .arg(Arg::with_name("port")
-             .long("port")
-             .short("p")
-             .takes_value(true)
-             .default_value("1234")
-             .validator(|val| val.parse::<u16>().map(|_| ()).map_err(|_| format!("Cannot parse {} to u16", val))))
-        .get_matches();
-    let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
-    //let _ = s3run().unwrap();
+use clap::ArgMatches;
+
+fn tunnel(matches: &ArgMatches) {
     use tokio_core::reactor::Core;
     let mut core = Core::new().unwrap();
     let handle = core.handle();
@@ -250,3 +268,58 @@ fn main() {
         });
     let _ = core.run(server);
 }
+
+fn main() {
+    use clap::{App,Arg};
+    let matches = App::new(env!("CARGO_PKG_NAME"))
+        .version(crate_version!())
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .arg(Arg::with_name("log-config")
+             .long("log-config")
+             .help("Log configuration")
+             .takes_value(true)
+             .default_value("log.yaml")
+            )
+        .arg(Arg::with_name("port")
+             .long("port")
+             .short("p")
+             .takes_value(true)
+             .default_value("1234")
+             .validator(|val| val.parse::<u16>().map(|_| ()).map_err(|_| format!("Cannot parse {} to u16", val))))
+        .arg(Arg::with_name("mode")
+             .help("What mode to run the tunnel in")
+             .index(1)
+             .possible_values(&["server", "client"])
+             .required(true))
+        .get_matches();
+    let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
+    let _ = s3run(&matches).unwrap();
+}
+
+
+#[test]
+fn serde_loading() {
+    let mut stream = Vec::new();
+    stream.push(Message {
+        id: 3,
+        payload: Payload::Command("connect".to_owned()),
+    });
+
+    stream.push(Message {
+        id: 4,
+        payload: Payload::Data("hello world".to_owned()),
+    });
+
+    stream.push(Message {
+        id: 5,
+        payload: Payload::Data("how you today".to_owned()),
+    });
+    let s = serde_yaml::to_string(&stream).unwrap();
+    println!("{}", s);
+
+    let stream: Vec<Message> = serde_yaml::from_str(&s).unwrap();
+
+    println!("{:#?}", stream);
+}
+

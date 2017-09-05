@@ -5,3 +5,4 @@
 .versionrc
 .version_upgrade
 log/
+tunnel.cfg

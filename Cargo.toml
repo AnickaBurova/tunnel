@@ -18,3 +18,7 @@ tokio-service = "0.1"
 clap = "2"
 log = "0.3"
 log4rs = "0.7"
+
+serde = "0.9"
+serde_derive = "0.9"
+serde_yaml = "0.6"
