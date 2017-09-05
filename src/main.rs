@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 04.09.2017
+ * Last Modified Date: 05.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -27,6 +27,7 @@ pub struct RawCodec {
 }
 
 use tokio_io::codec::{Encoder, Decoder};
+use tokio_core::net::UdpCodec;
 use bytes::BytesMut;
 
 impl Decoder for RawCodec {
@@ -41,10 +42,10 @@ impl Decoder for RawCodec {
             use std::str;
             match str::from_utf8(&line) {
                 Ok(s) => {
-                    info!("{}[{}]: {}", self.name, self.id, s);
+                    info!("Tcp-{}[{}]: {}", self.name, self.id, s);
                 }
                 Err(_) => {
-                    info!("{}[{}]: {}", self.name, self.id, line.len());
+                    info!("Tcp-{}[{}]: {}", self.name, self.id, line.len());
                 }
             }
             Ok(Some(line))
@@ -61,6 +62,32 @@ impl Encoder for RawCodec {
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
         buf.extend(msg);
         Ok(())
+    }
+}
+
+use std::net::SocketAddr;
+
+impl UdpCodec for RawCodec {
+    type In = (SocketAddr, Vec<u8>);
+    type Out = (SocketAddr, Vec<u8>);
+    fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
+        let size = buf.len();
+        let line = buf.to_vec();
+        self.id += 1;
+        use std::str;
+        match str::from_utf8(&line) {
+            Ok(s) => {
+                info!("Udp-{}[{}]: {}", self.name, self.id, s);
+            }
+            Err(_) => {
+                info!("Udp-{}[{}]: {}", self.name, self.id, line.len());
+            }
+        }
+        Ok((*src, line))
+    }
+    fn encode(&mut self, (addr, msg): Self::Out, buf: &mut Vec<u8>) -> SocketAddr {
+        buf.extend(msg);
+        addr
     }
 }
 
@@ -169,13 +196,13 @@ fn main() {
         .get_matches();
     let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
     //let _ = s3run().unwrap();
-    let address = format!("0.0.0.0:{}", &matches.value_of("port").unwrap()).parse().unwrap();
     use tokio_core::reactor::Core;
     let mut core = Core::new().unwrap();
     let handle = core.handle();
+    let address = format!("0.0.0.0:{}", &matches.value_of("port").unwrap()).parse().unwrap();
+    use futures::stream::Stream;
     use tokio_core::net::TcpListener;
     let listener = TcpListener::bind(&address, &handle).unwrap();
-    use futures::stream::Stream;
     let server = listener
         .incoming()
         .for_each(move |(socket, _peer_addr)| {
@@ -195,6 +222,29 @@ fn main() {
                 let client = writer2.send_all(reader).then(|_|Ok(()));
                 handle.spawn(server);
                 handle.spawn(client);
+                use tokio_core::net::UdpSocket;
+                let address = "0.0.0.0:48000".parse().unwrap();
+                let server = UdpSocket::bind(&address, &handle).unwrap();
+                info!("server");
+                let (writer, reader) = server.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                let address = "0.0.0.0:60000".parse().unwrap();
+                let client = UdpSocket::bind(&address, &handle).unwrap();
+                let (writer2, reader2) = client.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
+                let server = writer2
+                    .send_all(reader
+                              .map(|(_,msg)| {
+                                  let address = "10.10.101.146:60000".parse().unwrap();
+                                  (address, msg)
+                              }));
+                //let client = writer
+                    //.send_all(reader2
+                            //.map(|(_,msg)| {
+                                  //let address = "0.0.0.0:47999".parse().unwrap();
+                                  //(address, msg)
+                            //}));
+                //let writer = writer.send_all(reader);
+                handle.spawn(server.then(|_| Ok(())));
+                //handle.spawn(client.then(|_| Ok(())));
                 Ok(())
             })
         });
