@@ -140,6 +140,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
     }
 
     let mode = &matches.value_of("mode").unwrap();
+    let port = &matches.value_of("port").unwrap();
 
     use std::collections::BTreeMap;
     use std::fs::File;
@@ -180,8 +181,15 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 })
         })
         .and_then(|(client, bucket_name, bucket_prefix)| {
+            #[derive(PartialEq)]
+            enum Mode {
+                Server,
+                Client,
+            }
+
+            let mode = if mode == &"server" { Mode::Server } else { Mode::Client };
             let (mut stream_in, mut stream_out) = {
-                let (name_in, name_out) = if mode == &"server" {
+                let (name_in, name_out) = if mode == Mode::Server {
                     (format!("{}/tunnel.in", bucket_prefix), format!("{}/tunnel.out", bucket_prefix))
                 } else {
                     (format!("{}/tunnel.out", bucket_prefix), format!("{}/tunnel.in", bucket_prefix))
@@ -207,6 +215,60 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 Ok(output) => info!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
                 Err(e) => info!( "{:#?}", e),
             }
+
+            use tokio_core::reactor::Core;
+            let mut core = Core::new().unwrap();
+            let handle = core.handle();
+            let address = format!("0.0.0.0:{}",port).parse().unwrap();
+            use futures::stream::Stream;
+            use tokio_core::net::TcpListener;
+            let listener = TcpListener::bind(&address, &handle).unwrap();
+            let server = listener
+                .incoming()
+                .for_each(move |(socket, _peer_addr)| {
+                    info!("server: connected");
+                    let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                    //let address = "192.168.1.10:22".parse().unwrap();
+                    //
+                    let address = "10.10.101.146:22".parse().unwrap();
+                    use tokio_core::net::TcpStream;
+                    let client = TcpStream::connect(&address, &handle);
+                    let handle = handle.clone();
+                    client.and_then(move |socket| {
+                        let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
+                        info!("client: connected");
+                        use futures::Sink;
+                        let server = writer.send_all(reader2).then(|_|Ok(()));
+                        let client = writer2.send_all(reader).then(|_|Ok(()));
+                        handle.spawn(server);
+                        handle.spawn(client);
+                        use tokio_core::net::UdpSocket;
+                        let address = "0.0.0.0:48000".parse().unwrap();
+                        let server = UdpSocket::bind(&address, &handle).unwrap();
+                        info!("server");
+                        let (writer, reader) = server.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                        let address = "0.0.0.0:60000".parse().unwrap();
+                        let client = UdpSocket::bind(&address, &handle).unwrap();
+                        let (writer2, reader2) = client.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
+                        let server = writer2
+                            .send_all(reader
+                                      .map(|(_,msg)| {
+                                          let address = "10.10.101.146:60000".parse().unwrap();
+                                          (address, msg)
+                                      }));
+                        //let client = writer
+                            //.send_all(reader2
+                                    //.map(|(_,msg)| {
+                                          //let address = "0.0.0.0:47999".parse().unwrap();
+                                          //(address, msg)
+                                    //}));
+                        //let writer = writer.send_all(reader);
+                        handle.spawn(server.then(|_| Ok(())));
+                        //handle.spawn(client.then(|_| Ok(())));
+                        Ok(())
+                    })
+                });
+            let _ = core.run(server);
             Ok(())
         })
 }
@@ -214,59 +276,6 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
 use clap::ArgMatches;
 
 fn tunnel(matches: &ArgMatches) {
-    use tokio_core::reactor::Core;
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-    let address = format!("0.0.0.0:{}", &matches.value_of("port").unwrap()).parse().unwrap();
-    use futures::stream::Stream;
-    use tokio_core::net::TcpListener;
-    let listener = TcpListener::bind(&address, &handle).unwrap();
-    let server = listener
-        .incoming()
-        .for_each(move |(socket, _peer_addr)| {
-            info!("server: connected");
-            let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
-            //let address = "192.168.1.10:22".parse().unwrap();
-            //
-            let address = "10.10.101.146:22".parse().unwrap();
-            use tokio_core::net::TcpStream;
-            let client = TcpStream::connect(&address, &handle);
-            let handle = handle.clone();
-            client.and_then(move |socket| {
-                let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
-                info!("client: connected");
-                use futures::Sink;
-                let server = writer.send_all(reader2).then(|_|Ok(()));
-                let client = writer2.send_all(reader).then(|_|Ok(()));
-                handle.spawn(server);
-                handle.spawn(client);
-                use tokio_core::net::UdpSocket;
-                let address = "0.0.0.0:48000".parse().unwrap();
-                let server = UdpSocket::bind(&address, &handle).unwrap();
-                info!("server");
-                let (writer, reader) = server.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
-                let address = "0.0.0.0:60000".parse().unwrap();
-                let client = UdpSocket::bind(&address, &handle).unwrap();
-                let (writer2, reader2) = client.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
-                let server = writer2
-                    .send_all(reader
-                              .map(|(_,msg)| {
-                                  let address = "10.10.101.146:60000".parse().unwrap();
-                                  (address, msg)
-                              }));
-                //let client = writer
-                    //.send_all(reader2
-                            //.map(|(_,msg)| {
-                                  //let address = "0.0.0.0:47999".parse().unwrap();
-                                  //(address, msg)
-                            //}));
-                //let writer = writer.send_all(reader);
-                handle.spawn(server.then(|_| Ok(())));
-                //handle.spawn(client.then(|_| Ok(())));
-                Ok(())
-            })
-        });
-    let _ = core.run(server);
 }
 
 fn main() {
