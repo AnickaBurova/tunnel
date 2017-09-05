@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 05.09.2017
+ * Last Modified Date: 06.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -31,13 +31,17 @@ use std::io::{self};
 
 #[derive (Debug, Serialize, Deserialize)]
 enum Payload {
-    Command(String),
-    Data(String),
+    /// Create connection with id
+    Connect(u64),
+    /// For connection id, pass data
+    Data(u64, Vec<u8>),
+    /// Connection with id is synchronised up to msg id
+    Sync(u64, usize),
 }
 
 #[derive (Debug, Serialize, Deserialize)]
 struct Message {
-    pub id: u8,
+    pub id: usize,
     pub payload: Payload,
 }
 
@@ -162,10 +166,14 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 secret_key,
                 None)
                 .and_then(|credentials| {
-                    DefaultCredentialsProvider::new(Some(credentials))
+                    DefaultCredentialsProvider::new(Some(credentials.clone()))
+                        .and_then(|provider| {
+                            DefaultCredentialsProvider::new(Some(credentials.clone()))
+                                .and_then(|provider2| Ok((provider, provider2)))
+                        })
                 })
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-                .and_then(|provider| {
+                .and_then(|(provider, provider2)| {
                     use std::str::FromStr;
                     use aws_sdk_rust::aws::common::region::Region;
                     Region::from_str(&bucket_location)
@@ -175,12 +183,15 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         })
                         .and_then(|endpoint| {
                             use aws_sdk_rust::aws::s3::s3client::S3Client;
-                            Ok((S3Client::new(provider, endpoint),bucket_name, bucket_prefix))
+                            Ok((     S3Client::new(provider, endpoint.clone())
+                                    ,S3Client::new(provider2, endpoint)
+                                    ,bucket_name
+                                    ,bucket_prefix))
                         })
                         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
                 })
         })
-        .and_then(|(client, bucket_name, bucket_prefix)| {
+        .and_then(|(worker_client, client, bucket_name, bucket_prefix)| {
             #[derive(PartialEq)]
             enum Mode {
                 Server,
@@ -194,81 +205,202 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 } else {
                     (format!("{}/tunnel.out", bucket_prefix), format!("{}/tunnel.in", bucket_prefix))
                 };
-                let mut stream_in = PutObjectRequest::default();
+                use aws_sdk_rust::aws::s3::object::{PutObjectRequest, GetObjectRequest};
+                let mut stream_in = GetObjectRequest::default();
                 stream_in.bucket = bucket_name.clone();
                 stream_in.key = name_in;
-                let mut stream_out = GetObjectRequest::default();
+                let mut stream_out = PutObjectRequest::default();
                 stream_out.bucket = bucket_name.clone();
                 stream_out.key = name_out;
                 (stream_in, stream_out)
             };
-            use aws_sdk_rust::aws::s3::object::PutObjectRequest;
-            stream_in.body = Some(b"this is stream_in");
-            match client.put_object(&stream_in, None) {
-                Ok(output) => info!( "{:#?}", output),
-                Err(e) => info!("{:#?}", e),
-            }
-            // read s3 files
-            use aws_sdk_rust::aws::s3::object::GetObjectRequest;
-            use std::str;
-            match client.get_object(&stream_out, None) {
-                Ok(output) => info!( "\n\n{:#?}\n\n", str::from_utf8(&output.body).unwrap()),
-                Err(e) => info!( "{:#?}", e),
-            }
+            use std::sync::atomic::AtomicBool;
+            let allow_connection = if mode == Mode::Server {
+                None
+            } else {
+                Some(AtomicBool::new(false))
+            };
+            // worker reads data and sends it throght channel data_in_sender,
+            let (mut data_in_sender, data_in_receiver) = {
+                use futures::sync::mpsc;
+                mpsc::channel::<Result<Vec<u8>, io::Error>>(5)
+            };
+
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            // when sending data over s3 we will keep writing all data until we receive
+            // confirmation what data was last read by the other side, then we dont need to send
+            // that data anymore.
+            let last_msg_in = Arc::new(AtomicUsize::new(0));
+            let last_msg_out = Arc::new(AtomicUsize::new(0));
+
+            use std::thread;
+            // worker which reads periodically stream_in file and send any new changes towards the
+            // tunnel
+            let last_msg_in_clone = last_msg_in.clone();
+            let last_msg_out_clone = last_msg_out.clone();
+            let worker_in = thread::spawn(move || {
+                let last_msg_in = last_msg_in_clone;
+                let last_msg_out = last_msg_out_clone;
+                let client = worker_client;
+                // read s3 files
+                loop {
+                    use std::str;
+                    use std::thread::sleep;
+                    use std::time::Duration;
+                    match client.get_object(&stream_in, None) {
+                        Ok(output) => {
+                            let text = str::from_utf8(&output.body).unwrap();
+                            let mut stream: Vec<Message> = serde_yaml::from_str(text).unwrap();
+                            let last_id = last_msg_in.load(Ordering::SeqCst);
+                            let mut max_id = 0;
+                            for msg in stream.drain(..) {
+                                use std::cmp::max;
+                                max_id = max(max_id, msg.id);
+                                if last_id > msg.id {
+                                    // if id of the message has already been processed
+                                    continue;
+                                }
+                                match msg.payload {
+                                    Payload::Connect(id) => {
+                                        // start a connection!
+                                        match allow_connection {
+                                            Some(ref ac) => ac.store(true, Ordering::Relaxed),
+                                            None => (),
+                                        }
+                                    }
+                                    Payload::Data(id, data) => {
+                                        // send data to the tunnel
+                                        use futures::{Sink};
+                                        match data_in_sender.send(Ok(data)).wait() {
+                                            Err(_) => return,
+                                            Ok(t) => data_in_sender = t,
+                                        }
+                                    }
+                                    Payload::Sync(id, last_msg) => {
+                                        // set last message to out to this value (anything before
+                                        // that can be from now ignored)
+                                        last_msg_out.store(last_msg, Ordering::SeqCst);
+                                    }
+                                }
+                            }
+                            sleep(Duration::from_millis(200));
+                        }
+                        Err(e) => {
+                            // if the file is missing, just wait until it is created
+                            sleep(Duration::from_millis(2000));
+                        }
+                    }
+                }
+            });
+
+            // channels to send and receive data to send over s3
+            use std::sync::mpsc::{Sender, Receiver};
+            let (data_out_sender, data_out_receiver) = {
+                use std::sync::mpsc;
+                mpsc::channel()
+            };
+
+            // worker to write data stream out
+            let worker_out = thread::spawn(move || {
+                let mut all_msgs = Vec::new();
+                loop {
+                    // get new msgs
+                    let msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+                    if msgs.len() == 0 {
+                        use std::thread::sleep;
+                        use std::time::Duration;
+                        sleep(Duration::from_millis(500));
+                        continue;
+                    }
+
+                }
+            });
 
             use tokio_core::reactor::Core;
             let mut core = Core::new().unwrap();
             let handle = core.handle();
-            let address = format!("0.0.0.0:{}",port).parse().unwrap();
             use futures::stream::Stream;
-            use tokio_core::net::TcpListener;
-            let listener = TcpListener::bind(&address, &handle).unwrap();
-            let server = listener
-                .incoming()
-                .for_each(move |(socket, _peer_addr)| {
-                    info!("server: connected");
-                    let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
-                    //let address = "192.168.1.10:22".parse().unwrap();
-                    //
-                    let address = "10.10.101.146:22".parse().unwrap();
-                    use tokio_core::net::TcpStream;
-                    let client = TcpStream::connect(&address, &handle);
-                    let handle = handle.clone();
-                    client.and_then(move |socket| {
-                        let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
-                        info!("client: connected");
-                        use futures::Sink;
-                        let server = writer.send_all(reader2).then(|_|Ok(()));
-                        let client = writer2.send_all(reader).then(|_|Ok(()));
-                        handle.spawn(server);
-                        handle.spawn(client);
-                        use tokio_core::net::UdpSocket;
-                        let address = "0.0.0.0:48000".parse().unwrap();
-                        let server = UdpSocket::bind(&address, &handle).unwrap();
-                        info!("server");
-                        let (writer, reader) = server.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
-                        let address = "0.0.0.0:60000".parse().unwrap();
-                        let client = UdpSocket::bind(&address, &handle).unwrap();
-                        let (writer2, reader2) = client.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
-                        let server = writer2
-                            .send_all(reader
-                                      .map(|(_,msg)| {
-                                          let address = "10.10.101.146:60000".parse().unwrap();
-                                          (address, msg)
-                                      }));
-                        //let client = writer
-                            //.send_all(reader2
-                                    //.map(|(_,msg)| {
-                                          //let address = "0.0.0.0:47999".parse().unwrap();
-                                          //(address, msg)
-                                    //}));
-                        //let writer = writer.send_all(reader);
-                        handle.spawn(server.then(|_| Ok(())));
-                        //handle.spawn(client.then(|_| Ok(())));
+            use futures::Sink;
+            use futures::future::{self};
+            // if this is server, then create listener and wait for the connection
+            if mode == Mode::Server {
+                let address = format!("0.0.0.0:{}",port).parse().unwrap(); // waiting on specific port for incoming connections
+                use tokio_core::net::TcpListener;
+                let listener = TcpListener::bind(&address, &handle).unwrap();
+                let server = listener
+                    .incoming()
+                    .for_each(move |(socket, _peer_addr)| {
+                        info!("server: connected");
+                        // we have a connection, something connected to the listener on the local
+                        // pc or possible from somewhere else
+
+                        // create writer and reader as frames of Vec<u8>
+                        let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                        // for each data read from s3 send the data using writer
+                        let received_data = data_in_receiver.and_then(move|req| Box::new(future::ok(req)));
+                        let writer = writer.send_all(received_data);
                         Ok(())
-                    })
-                });
-            let _ = core.run(server);
+                    });
+            } else {
+                // if this is client, then wait until we are allowed to create connection
+                //let address = format!("0.0.0.0:{}",22).parse().unwrap(); // create connection to the ssh
+            }
+
+            stream_out.body = Some(b"this is stream_in");
+            match client.put_object(&stream_out, None) {
+                Ok(output) => info!( "{:#?}", output),
+                Err(e) => info!("{:#?}", e),
+            }
+
+            //use tokio_core::net::TcpListener;
+            //let listener = TcpListener::bind(&address, &handle).unwrap();
+            //let server = listener
+                //.incoming()
+                //.for_each(move |(socket, _peer_addr)| {
+                    //info!("server: connected");
+                    //let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                    ////let address = "192.168.1.10:22".parse().unwrap();
+                    ////
+                    //let address = "10.10.101.146:22".parse().unwrap();
+                    //use tokio_core::net::TcpStream;
+                    //let client = TcpStream::connect(&address, &handle);
+                    //let handle = handle.clone();
+                    //client.and_then(move |socket| {
+                        //let (writer2, reader2) = socket.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
+                        //info!("client: connected");
+                        //use futures::Sink;
+                        //let server = writer.send_all(reader2).then(|_|Ok(()));
+                        //let client = writer2.send_all(reader).then(|_|Ok(()));
+                        //handle.spawn(server);
+                        //handle.spawn(client);
+                        //use tokio_core::net::UdpSocket;
+                        //let address = "0.0.0.0:48000".parse().unwrap();
+                        //let server = UdpSocket::bind(&address, &handle).unwrap();
+                        //info!("server");
+                        //let (writer, reader) = server.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                        //let address = "0.0.0.0:60000".parse().unwrap();
+                        //let client = UdpSocket::bind(&address, &handle).unwrap();
+                        //let (writer2, reader2) = client.framed(RawCodec{id:0,name:"Client".to_owned()}).split();
+                        //let server = writer2
+                            //.send_all(reader
+                                      //.map(|(_,msg)| {
+                                          //let address = "10.10.101.146:60000".parse().unwrap();
+                                          //(address, msg)
+                                      //}));
+                        ////let client = writer
+                            ////.send_all(reader2
+                                    ////.map(|(_,msg)| {
+                                          ////let address = "0.0.0.0:47999".parse().unwrap();
+                                          ////(address, msg)
+                                    ////}));
+                        ////let writer = writer.send_all(reader);
+                        //handle.spawn(server.then(|_| Ok(())));
+                        ////handle.spawn(client.then(|_| Ok(())));
+                        //Ok(())
+                    //})
+                //});
+            //let _ = core.run(server);
             Ok(())
         })
 }
@@ -312,17 +444,21 @@ fn serde_loading() {
     let mut stream = Vec::new();
     stream.push(Message {
         id: 3,
-        payload: Payload::Command("connect".to_owned()),
+        payload: Payload::Connect(1),
     });
 
     stream.push(Message {
         id: 4,
-        payload: Payload::Data("hello world".to_owned()),
+        payload: Payload::Data(1, vec![0,1,2,3,4]),
     });
 
     stream.push(Message {
         id: 5,
-        payload: Payload::Data("how you today".to_owned()),
+        payload: Payload::Data(1, vec![0xff,1,2,3,4]),
+    });
+    stream.push(Message {
+        id: 6,
+        payload: Payload::Sync(1, 5),
     });
     let s = serde_yaml::to_string(&stream).unwrap();
     println!("{}", s);
