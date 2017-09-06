@@ -34,7 +34,7 @@ enum Payload {
     /// Create connection with id
     Connect(u64),
     /// For connection id, pass data
-    Data(u64, Vec<u8>),
+    Data(usize, Vec<u8>),
     /// Connection with id is synchronised up to msg id
     Sync(u64, usize),
 }
@@ -89,31 +89,31 @@ impl Encoder for RawCodec {
     }
 }
 
-use std::net::SocketAddr;
+//use std::net::SocketAddr;
 
-impl UdpCodec for RawCodec {
-    type In = (SocketAddr, Vec<u8>);
-    type Out = (SocketAddr, Vec<u8>);
-    fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
-        let size = buf.len();
-        let line = buf.to_vec();
-        self.id += 1;
-        use std::str;
-        match str::from_utf8(&line) {
-            Ok(s) => {
-                info!("Udp-{}[{}]: {}", self.name, self.id, s);
-            }
-            Err(_) => {
-                info!("Udp-{}[{}]: {}", self.name, self.id, line.len());
-            }
-        }
-        Ok((*src, line))
-    }
-    fn encode(&mut self, (addr, msg): Self::Out, buf: &mut Vec<u8>) -> SocketAddr {
-        buf.extend(msg);
-        addr
-    }
-}
+//impl UdpCodec for RawCodec {
+    //type In = (SocketAddr, Vec<u8>);
+    //type Out = (SocketAddr, Vec<u8>);
+    //fn decode(&mut self, src: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
+        //let size = buf.len();
+        //let line = buf.to_vec();
+        //self.id += 1;
+        //use std::str;
+        //match str::from_utf8(&line) {
+            //Ok(s) => {
+                //info!("Udp-{}[{}]: {}", self.name, self.id, s);
+            //}
+            //Err(_) => {
+                //info!("Udp-{}[{}]: {}", self.name, self.id, line.len());
+            //}
+        //}
+        //Ok((*src, line))
+    //}
+    //fn encode(&mut self, (addr, msg): Self::Out, buf: &mut Vec<u8>) -> SocketAddr {
+        //buf.extend(msg);
+        //addr
+    //}
+//}
 
 macro_rules! io_res {
     ($e: expr) => {
@@ -199,20 +199,20 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             }
 
             let mode = if mode == &"server" { Mode::Server } else { Mode::Client };
-            let (mut stream_in, mut stream_out) = {
+            let (mut stream_in, stream_out) = {
                 let (name_in, name_out) = if mode == Mode::Server {
                     (format!("{}/tunnel.in", bucket_prefix), format!("{}/tunnel.out", bucket_prefix))
                 } else {
                     (format!("{}/tunnel.out", bucket_prefix), format!("{}/tunnel.in", bucket_prefix))
                 };
-                use aws_sdk_rust::aws::s3::object::{PutObjectRequest, GetObjectRequest};
+                use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
                 let mut stream_in = GetObjectRequest::default();
                 stream_in.bucket = bucket_name.clone();
                 stream_in.key = name_in;
-                let mut stream_out = PutObjectRequest::default();
-                stream_out.bucket = bucket_name.clone();
-                stream_out.key = name_out;
-                (stream_in, stream_out)
+                //let mut stream_out = PutObjectRequest::default();
+                //stream_out.bucket = bucket_name.clone();
+                //stream_out.key = name_out;
+                (stream_in, (bucket_name, name_out))
             };
             use std::sync::atomic::AtomicBool;
             let allow_connection = if mode == Mode::Server {
@@ -223,7 +223,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             // worker reads data and sends it throght channel data_in_sender,
             let (mut data_in_sender, data_in_receiver) = {
                 use futures::sync::mpsc;
-                mpsc::channel::<Result<Vec<u8>, io::Error>>(5)
+                mpsc::channel::<io::Result<Vec<u8>>>(5)
             };
 
             use std::sync::Arc;
@@ -252,7 +252,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         Ok(output) => {
                             let text = str::from_utf8(&output.body).unwrap();
                             let mut stream: Vec<Message> = serde_yaml::from_str(text).unwrap();
-                            let last_id = last_msg_in.load(Ordering::SeqCst);
+                            let mut last_id = last_msg_in.load(Ordering::SeqCst);
                             let mut max_id = 0;
                             for msg in stream.drain(..) {
                                 use std::cmp::max;
@@ -271,6 +271,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                                     }
                                     Payload::Data(id, data) => {
                                         // send data to the tunnel
+                                        last_id = id; // update last_id to current id
                                         use futures::{Sink};
                                         match data_in_sender.send(Ok(data)).wait() {
                                             Err(_) => return,
@@ -284,6 +285,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                                     }
                                 }
                             }
+                            last_msg_in.store(last_id, Ordering::SeqCst);
                             sleep(Duration::from_millis(200));
                         }
                         Err(e) => {
@@ -301,19 +303,60 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 mpsc::channel()
             };
 
+            let mut data_in_out = Some((data_in_receiver, data_out_sender));
+
             // worker to write data stream out
             let worker_out = thread::spawn(move || {
-                let mut all_msgs = Vec::new();
+                let mut all_msgs: Vec<Message> = Vec::new();
+                let mut msg_id = 0;
+                let mut last_msg_in_stored = 0;
+                let (bucket_name, name_out) = stream_out;
                 loop {
                     // get new msgs
-                    let msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+                    let mut msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
                     if msgs.len() == 0 {
                         use std::thread::sleep;
                         use std::time::Duration;
                         sleep(Duration::from_millis(500));
                         continue;
                     }
-
+                    // remove any msg, which has been already received by the other end
+                    let last_msg_out = last_msg_out.load(Ordering::SeqCst);
+                    let mut tmp_all_msgs = all_msgs;
+                    all_msgs = tmp_all_msgs
+                        .drain(..)
+                        .filter(|msg| msg.id > last_msg_out)
+                        .collect();
+                    all_msgs
+                        .extend(msgs.drain(..).map(|data| {
+                            let id = msg_id;
+                            msg_id += 1;
+                            Message {
+                                id,
+                                payload: Payload::Data(1, data)
+                            }
+                        }));
+                    let last_msg_in_sync = last_msg_in.load(Ordering::SeqCst);
+                    if last_msg_in_sync > last_msg_in_stored {
+                        last_msg_in_stored = last_msg_in_sync;
+                        let id = msg_id;
+                        msg_id += 1;
+                        all_msgs.push(Message {
+                            id,
+                            payload: Payload::Sync(1, last_msg_in_stored),
+                        });
+                    }
+                    let data_msg = serde_yaml::to_string(&all_msgs).unwrap();
+                    let buf = data_msg.bytes().collect::<Vec<u8>>();
+                    use aws_sdk_rust::aws::s3::object::{PutObjectRequest};
+                    let mut stream_out = PutObjectRequest::default();
+                    stream_out.bucket = bucket_name.clone();
+                    stream_out.key = name_out.clone();
+                    stream_out.body = Some(&buf);
+                    match client.put_object(&stream_out, None) {
+                        Ok(output) => info!( "{:#?}", output),
+                        Err(e) => info!("{:#?}", e),
+                    }
                 }
             });
 
@@ -331,26 +374,38 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 let server = listener
                     .incoming()
                     .for_each(move |(socket, _peer_addr)| {
-                        info!("server: connected");
-                        // we have a connection, something connected to the listener on the local
-                        // pc or possible from somewhere else
 
-                        // create writer and reader as frames of Vec<u8>
-                        let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
-                        // for each data read from s3 send the data using writer
-                        let received_data = data_in_receiver.and_then(move|req| Box::new(future::ok(req)));
-                        let writer = writer.send_all(received_data);
+                        if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
+                            info!("server: connected");
+                            // we have a connection, something connected to the listener on the local
+                            // pc or possible from somewhere else
+
+                            // create writer and reader as frames of Vec<u8>
+                            let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                            // for each data read from s3 send the data using writer
+                            let received_data = data_in_receiver.then(|r| r.unwrap());
+                            let writer = writer
+                                .send_all(received_data)
+                                .then(|_| Ok(()));
+                            handle.spawn(writer);
+                            //use futures::stream::{Stream};
+                            use futures::future::*;
+                            let reader = reader
+                                .then(move |req| {
+                                    let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    Ok::<Vec<u8>,io::Error>(vec![])
+                                })
+                                .into_future()
+                                .then(|_| Ok(()));
+
+                            handle.spawn(reader);
+                        }
                         Ok(())
                     });
+                let _ = core.run(server);
             } else {
                 // if this is client, then wait until we are allowed to create connection
                 //let address = format!("0.0.0.0:{}",22).parse().unwrap(); // create connection to the ssh
-            }
-
-            stream_out.body = Some(b"this is stream_in");
-            match client.put_object(&stream_out, None) {
-                Ok(output) => info!( "{:#?}", output),
-                Err(e) => info!("{:#?}", e),
             }
 
             //use tokio_core::net::TcpListener;
