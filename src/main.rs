@@ -151,6 +151,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
     use std::io::Read;
     File::open("tunnel.cfg")
         .and_then(|file| {
+            info!("Loading tunnel.cfg");
             io_res!(serde_yaml::from_reader::<_,S3Config>(file), InvalidData)
         })
         .and_then(|cfg| {
@@ -160,6 +161,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             let bucket_prefix = cfg.bucket_prefix;
             let bucket_location = cfg.bucket_location;
             let secret_key = cfg.secret_key;
+            info!("Config loaded");
             use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
             ParametersProvider::with_parameters(
                 access_key,
@@ -190,6 +192,10 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         })
                         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
                 })
+                .map(|a| {
+                    info!("S3 connection created");
+                    a
+                })
         })
         .and_then(|(worker_client, client, bucket_name, bucket_prefix)| {
             #[derive(PartialEq)]
@@ -205,6 +211,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 } else {
                     (format!("{}/tunnel.out", bucket_prefix), format!("{}/tunnel.in", bucket_prefix))
                 };
+                info!("Using ({}, {}) for s3 files", name_in, name_out);
                 use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
                 let mut stream_in = GetObjectRequest::default();
                 stream_in.bucket = bucket_name.clone();
@@ -218,7 +225,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             let allow_connection = if mode == Mode::Server {
                 None
             } else {
-                Some(AtomicBool::new(false))
+                Some(Arc::new(AtomicBool::new(false)))
             };
             // worker reads data and sends it throght channel data_in_sender,
             let (mut data_in_sender, data_in_receiver) = {
@@ -239,9 +246,12 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             // tunnel
             let last_msg_in_clone = last_msg_in.clone();
             let last_msg_out_clone = last_msg_out.clone();
+            let allow_connection_clone = allow_connection.as_ref().and_then(|a| Some(a.clone()));
             let worker_in = thread::spawn(move || {
+                info!("Starting worker_in");
                 let last_msg_in = last_msg_in_clone;
                 let last_msg_out = last_msg_out_clone;
+                let allow_connection = allow_connection_clone;
                 let client = worker_client;
                 // read s3 files
                 loop {
@@ -290,6 +300,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         }
                         Err(e) => {
                             // if the file is missing, just wait until it is created
+                            info!("No input file, sleeping...");
                             sleep(Duration::from_millis(2000));
                         }
                     }
@@ -307,19 +318,30 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
 
             // worker to write data stream out
             let worker_out = thread::spawn(move || {
+                info!("Started worker_out");
                 let mut all_msgs: Vec<Message> = Vec::new();
-                let mut msg_id = 0;
+                let mut msg_id = 1;
                 let mut last_msg_in_stored = 0;
                 let (bucket_name, name_out) = stream_out;
                 loop {
                     // get new msgs
                     let mut msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
                     if msgs.len() == 0 {
+                        info!("No new msgs in worker_out");
                         use std::thread::sleep;
                         use std::time::Duration;
                         sleep(Duration::from_millis(500));
                         continue;
                     }
+                    if msg_id == 1 { // send connect
+                        let id = msg_id;
+                        msg_id += 1;
+                        all_msgs.push(Message {
+                            id,
+                            payload: Payload::Connect(1),
+                        });
+                    }
+                    info!("There are {} new messages in worker_out", msgs.len());
                     // remove any msg, which has been already received by the other end
                     let last_msg_out = last_msg_out.load(Ordering::SeqCst);
                     let mut tmp_all_msgs = all_msgs;
@@ -355,7 +377,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                     stream_out.body = Some(&buf);
                     match client.put_object(&stream_out, None) {
                         Ok(output) => info!( "{:#?}", output),
-                        Err(e) => info!("{:#?}", e),
+                        Err(e) => error!("{:#?}", e),
                     }
                 }
             });
@@ -368,13 +390,14 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             use futures::future::{self};
             // if this is server, then create listener and wait for the connection
             if mode == Mode::Server {
+                info!("Creating tcp listener");
                 let address = format!("0.0.0.0:{}",port).parse().unwrap(); // waiting on specific port for incoming connections
                 use tokio_core::net::TcpListener;
                 let listener = TcpListener::bind(&address, &handle).unwrap();
-                let server = listener
+                let runner = listener
                     .incoming()
                     .for_each(move |(socket, _peer_addr)| {
-
+                        info!("Got a new connection");
                         if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
                             info!("server: connected");
                             // we have a connection, something connected to the listener on the local
@@ -402,12 +425,51 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         }
                         Ok(())
                     });
-                let _ = core.run(server);
+                let _ = core.run(runner);
             } else {
                 // if this is client, then wait until we are allowed to create connection
-                //let address = format!("0.0.0.0:{}",22).parse().unwrap(); // create connection to the ssh
-            }
+                let address = format!("0.0.0.0:{}",22).parse().unwrap(); // create connection to the ssh
+                use std::sync::atomic::{Ordering};
+                let allow_connection = allow_connection.unwrap();
+                while !allow_connection.load(Ordering::SeqCst) {
+                    use std::thread::sleep;
+                    use std::time::Duration;
+                    info!("No connection, waiting");
+                    sleep(Duration::from_secs(1));
+                }
+                use tokio_core::net::TcpStream;
+                let client = TcpStream::connect(&address, &handle);
+                let runner = client
+                    .and_then(move |socket| {
+                        if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
+                            info!("server: connected");
+                            // we have a connection, something connected to the listener on the local
+                            // pc or possible from somewhere else
 
+                            // create writer and reader as frames of Vec<u8>
+                            let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                            // for each data read from s3 send the data using writer
+                            let received_data = data_in_receiver.then(|r| r.unwrap());
+                            let writer = writer
+                                .send_all(received_data)
+                                .then(|_| Ok(()));
+                            handle.spawn(writer);
+                            //use futures::stream::{Stream};
+                            use futures::future::*;
+                            let reader = reader
+                                .then(move |req| {
+                                    let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    Ok::<Vec<u8>,io::Error>(vec![])
+                                })
+                                .into_future()
+                                .then(|_| Ok(()));
+
+                            handle.spawn(reader);
+                        }
+                        Ok(())
+                    });
+                let _ = core.run(runner);
+            };
             //use tokio_core::net::TcpListener;
             //let listener = TcpListener::bind(&address, &handle).unwrap();
             //let server = listener
