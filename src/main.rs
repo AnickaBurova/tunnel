@@ -445,7 +445,9 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 let _ = core.run(runner);
             } else {
                 // if this is client, then wait until we are allowed to create connection
-                let address = format!("0.0.0.0:{}",4000).parse().unwrap(); // create connection to the ssh
+                use std::net::TcpStream;
+                use std::io::{Write, Read};
+                let address = format!("0.0.0.0:{}",4000); // create connection to the ssh
                 use std::sync::atomic::{Ordering};
                 let allow_connection = allow_connection.unwrap();
                 while !allow_connection.load(Ordering::SeqCst) {
@@ -455,53 +457,59 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                     sleep(Duration::from_secs(1));
                 }
                 info!("Connection...");
-                use tokio_core::net::TcpStream;
-                let client = TcpStream::connect(&address, &handle);
-                let runner = client
-                    .and_then(move |socket| {
+                let client = TcpStream::connect(&address)
+                    .and_then(|socket| {
                         if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
-                            info!("client: connected");
-                            // we have a connection, something connected to the listener on the local
-                            // pc or possible from somewhere else
-
-                            // create writer and reader as frames of Vec<u8>
-                            let (writer, reader) = socket.framed(RawCodec{id:0,name:"client".to_owned()}).split();
-                            // for each data read from s3 send the data using writer
-                            //let reader = reader
-                                //.then(move |req| {
-                                    //let _ = data_out_sender.send(req.unwrap()).unwrap();
-                                    //Ok::<Vec<u8>,io::Error>(vec![])
-                                //});
-                            use futures::future::{loop_fn, ok, Future, FutureResult, Loop};
-                            let received_data = data_in_receiver
-                                .then(|value| {
-                                    value.unwrap()
-                                })
-                                //.select(reader)
-                            ;
-                            let writer = writer
-                                .send_all(reader)
-                                .then(|_| {
-                                    info!("writer end");
-                                    Ok(())
-                                });
-                            handle.spawn(writer);
-                            info!("client: ...");
-                            //use futures::stream::{Stream};
-                            //use futures::future::*;
-                            //let reader = reader
-                                //.then(move |req| {
-                                    //let _ = data_out_sender.send(req.unwrap()).unwrap();
-                                    //Ok::<Vec<u8>,io::Error>(vec![])
-                                //})
-                                //.into_future()
-                                //.then(|_| Ok(()));
-
-                            //handle.spawn(reader);
+                            loop {
+                                for 
+                            }
                         }
-                        Ok(())
                     });
-                let _ = core.run(runner);
+                //let runner = client
+                    //.and_then(move |socket| {
+                        //if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
+                            //info!("client: connected");
+                            //// we have a connection, something connected to the listener on the local
+                            //// pc or possible from somewhere else
+
+                            //// create writer and reader as frames of Vec<u8>
+                            //let (writer, reader) = socket.framed(RawCodec{id:0,name:"client".to_owned()}).split();
+                            //// for each data read from s3 send the data using writer
+                            ////let reader = reader
+                                ////.then(move |req| {
+                                    ////let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    ////Ok::<Vec<u8>,io::Error>(vec![])
+                                ////});
+                            //use futures::future::{loop_fn, ok, Future, FutureResult, Loop};
+                            //let received_data = data_in_receiver
+                                //.then(|value| {
+                                    //value.unwrap()
+                                //})
+                                ////.select(reader)
+                            //;
+                            //let writer = writer
+                                //.send_all(reader)
+                                //.then(|_| {
+                                    //info!("writer end");
+                                    //Ok(())
+                                //});
+                            //handle.spawn(writer);
+                            //info!("client: ...");
+                            ////use futures::stream::{Stream};
+                            ////use futures::future::*;
+                            ////let reader = reader
+                                ////.then(move |req| {
+                                    ////let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    ////Ok::<Vec<u8>,io::Error>(vec![])
+                                ////})
+                                ////.into_future()
+                                ////.then(|_| Ok(()));
+
+                            ////handle.spawn(reader);
+                        //}
+                        //Ok(())
+                    //});
+                //let _ = core.run(runner);
             };
             //use tokio_core::net::TcpListener;
             //let listener = TcpListener::bind(&address, &handle).unwrap();
