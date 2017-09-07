@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 06.09.2017
+ * Last Modified Date: 07.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -205,6 +205,8 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
             }
 
             let mode = if mode == &"server" { Mode::Server } else { Mode::Client };
+            // 'stream_in' is s3 file, from where this instance is going to read the data
+            // 'stream_out' is s3 file, where this instance is going to write the data
             let (mut stream_in, stream_out) = {
                 let (name_in, name_out) = if mode == Mode::Server {
                     (format!("{}/tunnel.in", bucket_prefix), format!("{}/tunnel.out", bucket_prefix))
@@ -213,46 +215,51 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                 };
                 info!("Using ({}, {}) for s3 files", name_in, name_out);
                 use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
+                // get object ('stream_in') can be created just once here and then reused in the
+                // worker thread.
                 let mut stream_in = GetObjectRequest::default();
                 stream_in.bucket = bucket_name.clone();
                 stream_in.key = name_in;
-                //let mut stream_out = PutObjectRequest::default();
-                //stream_out.bucket = bucket_name.clone();
-                //stream_out.key = name_out;
+                // put object has to be always created when it is going to be used, because output
+                // data has lifetime of the put object
                 (stream_in, (bucket_name, name_out))
             };
+            // when in client mode, wait before doing any connection, to receive connection request
+            // from the server, 'allow_connection' will start as false, until there is a connection
             use std::sync::atomic::AtomicBool;
             let allow_connection = if mode == Mode::Server {
                 None
             } else {
                 Some(Arc::new(AtomicBool::new(false)))
             };
-            // worker reads data and sends it throght channel data_in_sender,
+            // Read data from s3, send it over 'data_in_sender' to 'data_in_receiver' and write it
+            // to tcp.
             let (mut data_in_sender, data_in_receiver) = {
                 use futures::sync::mpsc;
-                mpsc::channel::<io::Result<Vec<u8>>>(5)
+                mpsc::channel::<io::Result<Vec<u8>>>(1)
             };
 
             use std::sync::Arc;
             use std::sync::atomic::{AtomicUsize, Ordering};
-            // when sending data over s3 we will keep writing all data until we receive
+            // When sending data over s3, keep writing all the data until we receive
             // confirmation what data was last read by the other side, then we dont need to send
             // that data anymore.
             let last_msg_in = Arc::new(AtomicUsize::new(0));
             let last_msg_out = Arc::new(AtomicUsize::new(0));
 
             use std::thread;
-            // worker which reads periodically stream_in file and send any new changes towards the
-            // tunnel
+            // Worker which reads periodically stream_in file and send any new changes over
+            // 'data_in_sender'.
             let last_msg_in_clone = last_msg_in.clone();
             let last_msg_out_clone = last_msg_out.clone();
             let allow_connection_clone = allow_connection.as_ref().and_then(|a| Some(a.clone()));
-            let worker_in = thread::spawn(move || {
-                info!("Starting worker_in");
+            let s3_reader = thread::spawn(move || {
+                info!("Starting s3 reader");
                 let last_msg_in = last_msg_in_clone;
                 let last_msg_out = last_msg_out_clone;
                 let allow_connection = allow_connection_clone;
                 let client = worker_client;
+                let mut data_in_sender = data_in_sender;
                 // read s3 files
                 loop {
                     use std::str;
@@ -267,13 +274,15 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                             for msg in stream.drain(..) {
                                 use std::cmp::max;
                                 max_id = max(max_id, msg.id);
-                                if last_id > msg.id {
+                                if last_id >= msg.id {
                                     // if id of the message has already been processed
                                     continue;
                                 }
+                                last_id = msg.id;
                                 match msg.payload {
                                     Payload::Connect(id) => {
                                         // start a connection!
+                                        info!("Got connection");
                                         match allow_connection {
                                             Some(ref ac) => ac.store(true, Ordering::Relaxed),
                                             None => (),
@@ -281,14 +290,22 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                                     }
                                     Payload::Data(id, data) => {
                                         // send data to the tunnel
-                                        last_id = id; // update last_id to current id
                                         use futures::{Sink};
+                                        info!("Got data");
+                                        let len = data.len();
                                         match data_in_sender.send(Ok(data)).wait() {
-                                            Err(_) => return,
-                                            Ok(t) => data_in_sender = t,
+                                            Ok(t) => {
+                                                info!("Data send to tcp receiver: {}", len);
+                                                data_in_sender = t;
+                                            }
+                                            Err(e) => {
+                                                error!("Error: {}", e);
+                                                return;
+                                            }
                                         }
                                     }
                                     Payload::Sync(id, last_msg) => {
+                                        info!("Got sync: {}", last_msg);
                                         // set last message to out to this value (anything before
                                         // that can be from now ignored)
                                         last_msg_out.store(last_msg, Ordering::SeqCst);
@@ -300,14 +317,13 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                         }
                         Err(e) => {
                             // if the file is missing, just wait until it is created
-                            info!("No input file, sleeping...");
                             sleep(Duration::from_millis(2000));
                         }
                     }
                 }
             });
 
-            // channels to send and receive data to send over s3
+            // Channels to send and receive the data, to send over s3
             use std::sync::mpsc::{Sender, Receiver};
             let (data_out_sender, data_out_receiver) = {
                 use std::sync::mpsc;
@@ -327,7 +343,6 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                     // get new msgs
                     let mut msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
                     if msgs.len() == 0 {
-                        info!("No new msgs in worker_out");
                         use std::thread::sleep;
                         use std::time::Duration;
                         sleep(Duration::from_millis(500));
@@ -406,29 +421,31 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                             // create writer and reader as frames of Vec<u8>
                             let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
                             // for each data read from s3 send the data using writer
-                            let received_data = data_in_receiver.then(|r| r.unwrap());
-                            let writer = writer
-                                .send_all(received_data)
-                                .then(|_| Ok(()));
-                            handle.spawn(writer);
                             //use futures::stream::{Stream};
                             use futures::future::*;
                             let reader = reader
                                 .then(move |req| {
+                                    info!("got message from TCP");
                                     let _ = data_out_sender.send(req.unwrap()).unwrap();
                                     Ok::<Vec<u8>,io::Error>(vec![])
                                 })
-                                .into_future()
-                                .then(|_| Ok(()));
+                            ;
+                                //.into_future()
+                                //.then(|_| Ok(()));
 
-                            handle.spawn(reader);
+                            //handle.spawn(reader);
+                            let received_data = data_in_receiver.then(|r| r.unwrap()).select(reader);
+                            let writer = writer
+                                .send_all(received_data)
+                                .then(|_| Ok(()));
+                            handle.spawn(writer);
                         }
                         Ok(())
                     });
                 let _ = core.run(runner);
             } else {
                 // if this is client, then wait until we are allowed to create connection
-                let address = format!("0.0.0.0:{}",22).parse().unwrap(); // create connection to the ssh
+                let address = format!("0.0.0.0:{}",4000).parse().unwrap(); // create connection to the ssh
                 use std::sync::atomic::{Ordering};
                 let allow_connection = allow_connection.unwrap();
                 while !allow_connection.load(Ordering::SeqCst) {
@@ -437,34 +454,50 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                     info!("No connection, waiting");
                     sleep(Duration::from_secs(1));
                 }
+                info!("Connection...");
                 use tokio_core::net::TcpStream;
                 let client = TcpStream::connect(&address, &handle);
                 let runner = client
                     .and_then(move |socket| {
                         if let Some((data_in_receiver, data_out_sender)) = data_in_out.take() {
-                            info!("server: connected");
+                            info!("client: connected");
                             // we have a connection, something connected to the listener on the local
                             // pc or possible from somewhere else
 
                             // create writer and reader as frames of Vec<u8>
-                            let (writer, reader) = socket.framed(RawCodec{id:0,name:"Server".to_owned()}).split();
+                            let (writer, reader) = socket.framed(RawCodec{id:0,name:"client".to_owned()}).split();
                             // for each data read from s3 send the data using writer
-                            let received_data = data_in_receiver.then(|r| r.unwrap());
-                            let writer = writer
-                                .send_all(received_data)
-                                .then(|_| Ok(()));
-                            handle.spawn(writer);
-                            //use futures::stream::{Stream};
-                            use futures::future::*;
-                            let reader = reader
-                                .then(move |req| {
-                                    let _ = data_out_sender.send(req.unwrap()).unwrap();
-                                    Ok::<Vec<u8>,io::Error>(vec![])
+                            //let reader = reader
+                                //.then(move |req| {
+                                    //let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    //Ok::<Vec<u8>,io::Error>(vec![])
+                                //});
+                            use futures::future::{loop_fn, ok, Future, FutureResult, Loop};
+                            let received_data = data_in_receiver
+                                .then(|value| {
+                                    value.unwrap()
                                 })
-                                .into_future()
-                                .then(|_| Ok(()));
+                                //.select(reader)
+                            ;
+                            let writer = writer
+                                .send_all(reader)
+                                .then(|_| {
+                                    info!("writer end");
+                                    Ok(())
+                                });
+                            handle.spawn(writer);
+                            info!("client: ...");
+                            //use futures::stream::{Stream};
+                            //use futures::future::*;
+                            //let reader = reader
+                                //.then(move |req| {
+                                    //let _ = data_out_sender.send(req.unwrap()).unwrap();
+                                    //Ok::<Vec<u8>,io::Error>(vec![])
+                                //})
+                                //.into_future()
+                                //.then(|_| Ok(()));
 
-                            handle.spawn(reader);
+                            //handle.spawn(reader);
                         }
                         Ok(())
                     });

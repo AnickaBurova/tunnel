@@ -6,3 +6,4 @@
 .version_upgrade
 log/
 tunnel.cfg
+.deploy_cmd
