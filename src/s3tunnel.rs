@@ -73,6 +73,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             info!("Reading data from '{}'", reader_name);
             info!("Writing data to '{}'", writer_name);
             let reader_name: String = reader_name.into();
+            let writer_name: String = writer_name.into();
             use std::thread;
             use std::thread::sleep;
             use std::time::Duration;
@@ -82,9 +83,12 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                 let mut writer_sync = 0;
                 use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
                 let mut reader = GetObjectRequest::default();
-                reader.bucket = bucket_name.into();
+                reader.bucket = bucket_name.clone();
                 reader.key = format!("{}/{}", bucket_prefix, reader_name);
+                let mut all_msgs: Vec<Message> = Vec::new(); // all the messages which are writen to the tunnel writer.
+                let mut msg_id = 1; // start messages from 1, so we can keep writer_sync from 0
                 loop {
+                    let mut last_writer_sync = writer_sync;
                     let mut last_reader_sync = reader_sync;
                     match client.get_object(&reader, None) {
                         Ok(output) => {
@@ -125,18 +129,93 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             sleep(Duration::from_millis(2000));
                         }
                     }
-                    for msg in writer_receiver.try_iter() {
-                        use std::str;
-                        match str::from_utf8(&msg) {
-                            Ok(text) => {
-                                info!("Getting '{}'", text);
-                            }
-                            Err(err) => {
-                                error!("Failed to convert to text: {}", err);
-                            }
+
+                    if last_writer_sync < writer_sync {
+                        // the other side has read messages up to writer_sync, we can
+                        // filter them out
+                        let remove_all = all_msgs
+                            .last()
+                            .map(|last| last.id == writer_sync )
+                            .unwrap_or(false);
+                        // little performance improvement in case we can just clear all the
+                        // messages
+                        if remove_all {
+                            all_msgs.clear();
+                        } else {
+                            // otherwise filter all older then writer_sync
+                            let tmp = all_msgs
+                                .drain(..)
+                                .filter(|msg| msg.id > writer_sync)
+                                .collect();
+                            all_msgs = tmp;
                         }
                     }
-                    sleep(Duration::from_secs(1));
+
+                    let mut is_change = false;
+
+                    if last_reader_sync < reader_sync {
+                        // We read another messages from the tunnel, let the other side know, we
+                        // have them and it doesn't need to send them anymore.
+                        let id = msg_id;
+                        msg_id += 1;
+                        all_msgs
+                            .push(Message {
+                                id,
+                                // For now, id of the connection is just 1, until multiple
+                                // connections are implemented.
+                                payload: Payload::Sync(1, reader_sync),
+                            });
+                        is_change = true;
+                    }
+
+                    let mut new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+
+                    if new_msgs.len() > 0 {
+                        // if this is a server, and this is the first message to send, send connect
+                        // first
+                        if msg_id == 1 && is_server {
+                            let id = msg_id;
+                            msg_id += 1;
+                            all_msgs
+                                .push(Message {
+                                    id,
+                                    // For now, id of the connection is just 1, until multiple
+                                    // connections are implemented.
+                                    payload: Payload::Connect(1),
+                                });
+                        }
+                        // add the new messages to all
+                        all_msgs
+                            .extend( new_msgs
+                                     .drain(..)
+                                     .map(|data| {
+                                         let id = msg_id;
+                                         msg_id += 1;
+                                         Message {
+                                             id,
+                                             payload: Payload::Data(1, data),
+                                         }
+                                     }));
+                        is_change = true;
+                    }
+
+                    if is_change {
+                        let msg = serde_yaml::to_string(&all_msgs).unwrap();
+                        let msg = msg.bytes().collect::<Vec<u8>>();
+                        use aws_sdk_rust::aws::s3::object::{PutObjectRequest};
+                        let mut stream_out = PutObjectRequest::default();
+                        stream_out.bucket = bucket_name.clone();
+                        stream_out.key = format!("{}/{}", bucket_prefix, writer_name);
+                        stream_out.body = Some(&msg);
+                        match client.put_object(&stream_out, None) {
+                            Ok(output) => info!( "{:#?}", output),
+                            Err(e) => error!("{:#?}", e),
+                        }
+                    }
+
+
+                    // keep max of 5 times per second
+                    sleep(Duration::from_millis(200));
                 }
             });
             //use std::sync::Arc;
