@@ -2,7 +2,7 @@
  * File: src/config.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 07.09.2017
+ * Last Modified Date: 08.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -26,7 +26,6 @@ use std::io::{self};
 /// Load s3 config from file tunnel.cfg
 pub fn load_config() -> io::Result<S3Config> {
     use std::fs::File;
-    use std::io::Read;
     File::open("tunnel.cfg")
         .and_then(|file| {
             info!("Loading");

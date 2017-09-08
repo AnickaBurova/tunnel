@@ -8,17 +8,19 @@
 
 use s3tunnel::Tunnel;
 use std::io::{self};
-//use std::iter::Iterator;
+use clap::ArgMatches;
 
-pub fn run(tunnel: Tunnel) -> io::Result<()>{
+pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
     use std::net::TcpStream;
     use std::io::{Write, Read};
+    let port = &matches.value_of("client-port").unwrap();
+    let ip = &matches.value_of("client-address").unwrap();
     let tunnel_reader = tunnel.reader;
     let tunnel_writer = tunnel.writer;
     let tunnel_connection = tunnel.connection.unwrap();
-    let connection_id = tunnel_connection.recv().unwrap();
+    let _connection_id = tunnel_connection.recv().unwrap();
 
-    let address = format!("127.0.0.1:{}",22); // create connection to the ssh
+    let address = format!("{}:{}",ip, port); // create connection to the ssh
     info!("Connecting...");
     TcpStream::connect(&address)
         .and_then(move |mut socket| {
@@ -29,7 +31,7 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                 .and_then(move |_| {
                     loop {
                         for data in tunnel_reader.try_iter() {
-                            socket.write(&data);
+                            let _ = socket.write(&data);
                         }
                         match socket.read(&mut buf) {
                             Ok(len) => {
@@ -37,6 +39,7 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                                 let _ = io_res!(tunnel_writer.send(data))?;
                             }
                             Err(_) => {
+                                break;
                             }
                         }
                     }

@@ -8,7 +8,6 @@
 
 use std::io::{self};
 use config::S3Config;
-use aws_sdk_rust::aws::s3::s3client::S3Client;
 use serde_yaml;
 
 use std::sync::mpsc::{Sender, Receiver, channel};
@@ -105,8 +104,8 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                 let mut all_msgs: Vec<Message> = Vec::new(); // all the messages which are writen to the tunnel writer.
                 let mut msg_id = 1; // start messages from 1, so we can keep writer_sync from 0
                 loop {
-                    let mut last_writer_sync = writer_sync;
-                    let mut last_reader_sync = reader_sync;
+                    let last_writer_sync = writer_sync;
+                    let last_reader_sync = reader_sync;
                     // Reading tunnel input
                     info!("Reading tunnel input: {}", reader_name);
                     match client.get_object(&reader, None) {
@@ -130,10 +129,9 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                                     }
                                     Payload::Data(_, data) => {
                                         info!("Got data");
-                                        let len = data.len();
                                         reader_sender.send(data).unwrap();
                                     }
-                                    Payload::Sync(id, last_msg) => {
+                                    Payload::Sync(_id, last_msg) => {
                                         info!("Got sync: {}", last_msg);
                                         writer_sync = last_msg;
                                     }
@@ -142,7 +140,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
 
                             sleep(Duration::from_millis(200));
                         }
-                        Err(e) => {
+                        Err(_) => {
                             // if the file is missing, just wait until it is created
                             info!("{} not found", reader_name);
                             sleep(Duration::from_millis(2000));
@@ -231,32 +229,8 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             Err(e) => error!("{:#?}", e),
                         }
                     }
-
-
-                    // keep max of 5 times per second
-                    //sleep(Duration::from_millis(200));
                 }
             });
-            //use std::sync::Arc;
-            //use std::sync::atomic::{AtomicUsize, Ordering};
-            //// When sending data over s3, keep writing all the data until we receive
-            //// confirmation what data was last read by the other side, then we dont need to send
-            //// that data anymore.
-            //let last_msg_in = Arc::new(AtomicUsize::new(0));
-            //let last_msg_out = Arc::new(AtomicUsize::new(0));
-
-            //let (stream_in, stream_out) = {
-                //info!("Using ({}, {}) for s3 files", name_in, name_out);
-                //use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
-                //// get object ('stream_in') can be created just once here and then reused in the
-                //// worker thread.
-                //let mut stream_in = GetObjectRequest::default();
-                //stream_in.bucket = bucket_name.clone();
-                //stream_in.key = name_in;
-                //// put object has to be always created when it is going to be used, because output
-                //// data has lifetime of the put object
-                //(stream_in, (bucket_name, name_out))
-            //};
 
             Ok(Tunnel {
                 writer: writer_sender,
@@ -265,145 +239,3 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             })
         })
 }
-
-
-// reader
-            //let last_msg_in_clone = last_msg_in.clone();
-            //let last_msg_out_clone = last_msg_out.clone();
-            //let allow_connection_clone = allow_connection.as_ref().and_then(|a| Some(a.clone()));
-            //let s3_reader = thread::spawn(move || {
-                //info!("Starting s3 reader");
-                //let last_msg_in = last_msg_in_clone;
-                //let last_msg_out = last_msg_out_clone;
-                //let allow_connection = allow_connection_clone;
-                //let client = worker_client;
-                //let mut data_in_sender = data_in_sender;
-                //// read s3 files
-                //loop {
-                    //use std::str;
-                    //use std::thread::sleep;
-                    //use std::time::Duration;
-                    //match client.get_object(&stream_in, None) {
-                        //Ok(output) => {
-                            //let text = str::from_utf8(&output.body).unwrap();
-                            //let mut stream: Vec<Message> = serde_yaml::from_str(text).unwrap();
-                            //let mut last_id = last_msg_in.load(Ordering::SeqCst);
-                            //let mut max_id = 0;
-                            //for msg in stream.drain(..) {
-                                //use std::cmp::max;
-                                //max_id = max(max_id, msg.id);
-                                //if last_id >= msg.id {
-                                    //// if id of the message has already been processed
-                                    //continue;
-                                //}
-                                //last_id = msg.id;
-                                //match msg.payload {
-                                    //Payload::Connect(id) => {
-                                        //// start a connection!
-                                        //info!("Got connection");
-                                        //match allow_connection {
-                                            //Some(ref ac) => ac.store(true, Ordering::Relaxed),
-                                            //None => (),
-                                        //}
-                                    //}
-                                    //Payload::Data(id, data) => {
-                                        //// send data to the tunnel
-                                        //use futures::{Sink};
-                                        //info!("Got data");
-                                        //let len = data.len();
-                                        //match data_in_sender.send(Ok(data)).wait() {
-                                            //Ok(t) => {
-                                                //info!("Data send to tcp receiver: {}", len);
-                                                //data_in_sender = t;
-                                            //}
-                                            //Err(e) => {
-                                                //error!("Error: {}", e);
-                                                //return;
-                                            //}
-                                        //}
-                                    //}
-                                    //Payload::Sync(id, last_msg) => {
-                                        //info!("Got sync: {}", last_msg);
-                                        //// set last message to out to this value (anything before
-                                        //// that can be from now ignored)
-                                        //last_msg_out.store(last_msg, Ordering::SeqCst);
-                                    //}
-                                //}
-                            //}
-                            //last_msg_in.store(last_id, Ordering::SeqCst);
-                            //sleep(Duration::from_millis(200));
-                        //}
-                        //Err(e) => {
-                            //// if the file is missing, just wait until it is created
-                            //sleep(Duration::from_millis(2000));
-                        //}
-                    //}
-                //}
-            //});
-
-// writer
-             //worker to write data stream out
-            //let worker_out = thread::spawn(move || {
-                //info!("Started worker_out");
-                //let mut all_msgs: Vec<Message> = Vec::new();
-                //let mut msg_id = 1;
-                //let mut last_msg_in_stored = 0;
-                //let (bucket_name, name_out) = stream_out;
-                //loop {
-                     //get new msgs
-                    //let mut msgs = data_out_receiver.try_iter().collect::<Vec<Vec<u8>>>();
-                    //if msgs.len() == 0 {
-                        //use std::thread::sleep;
-                        //use std::time::Duration;
-                        //sleep(Duration::from_millis(500));
-                        //continue;
-                    //}
-                    //if msg_id == 1 {  send connect
-                        //let id = msg_id;
-                        //msg_id += 1;
-                        //all_msgs.push(Message {
-                            //id,
-                            //payload: Payload::Connect(1),
-                        //});
-                    //}
-                    //info!("There are {} new messages in worker_out", msgs.len());
-                     //remove any msg, which has been already received by the other end
-                    //let last_msg_out = last_msg_out.load(Ordering::SeqCst);
-                    //let mut tmp_all_msgs = all_msgs;
-                    //all_msgs = tmp_all_msgs
-                        //.drain(..)
-                        //.filter(|msg| msg.id > last_msg_out)
-                        //.collect();
-                    //all_msgs
-                        //.extend(msgs.drain(..).map(|data| {
-                            //let id = msg_id;
-                            //msg_id += 1;
-                            //Message {
-                                //id,
-                                //payload: Payload::Data(1, data)
-                            //}
-                        //}));
-                    //let last_msg_in_sync = last_msg_in.load(Ordering::SeqCst);
-                    //if last_msg_in_sync > last_msg_in_stored {
-                        //last_msg_in_stored = last_msg_in_sync;
-                        //let id = msg_id;
-                        //msg_id += 1;
-                        //all_msgs.push(Message {
-                            //id,
-                            //payload: Payload::Sync(1, last_msg_in_stored),
-                        //});
-                    //}
-                    //let data_msg = serde_yaml::to_string(&all_msgs).unwrap();
-                    //let buf = data_msg.bytes().collect::<Vec<u8>>();
-                    //use aws_sdk_rust::aws::s3::object::{PutObjectRequest};
-                    //let mut stream_out = PutObjectRequest::default();
-                    //stream_out.bucket = bucket_name.clone();
-                    //stream_out.key = name_out.clone();
-                    //stream_out.body = Some(&buf);
-                    //match client.put_object(&stream_out, None) {
-                        //Ok(output) => info!( "{:#?}", output),
-                        //Err(e) => error!("{:#?}", e),
-                    //}
-                //}
-            //});
-

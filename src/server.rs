@@ -9,11 +9,13 @@
 
 use s3tunnel::Tunnel;
 use std::io::{self};
+use clap::ArgMatches;
 
-pub fn run(tunnel: Tunnel) -> io::Result<()>{
-    use std::net::{TcpListener, TcpStream};
+pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
+    use std::net::{TcpListener};
     use std::io::{Write, Read};
-    let address = format!("0.0.0.0:{}",1234); // create connection to the ssh
+    let port = &matches.value_of("server-port").unwrap();
+    let address = format!("0.0.0.0:{}",port); // create connection to the ssh
     TcpListener::bind(address)
         .and_then(move|listener| {
             listener
@@ -31,7 +33,7 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                         .and_then(move |_| {
                             loop {
                                 for data in tunnel_reader.try_iter() {
-                                    socket.write(&data);
+                                    let _ = socket.write(&data);
                                 }
                                 match socket.read(&mut buf) {
                                     Ok(len) => {
@@ -39,6 +41,7 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                                         let _ = io_res!(tunnel_writer.send(data))?;
                                     }
                                     Err(_) => {
+                                        break;
                                     }
                                 }
                             }

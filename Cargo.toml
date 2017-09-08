@@ -1,6 +1,6 @@
 [package]
 name = "tunnel"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Anicka Burova <anicka.burova@gmail.com>"]
 description = "Tunnel over various methods"
 
