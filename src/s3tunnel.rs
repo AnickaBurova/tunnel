@@ -82,6 +82,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             use std::thread::sleep;
             use std::time::Duration;
             use std::str;
+            let mut writer_created = false;
             let _ = thread::spawn(move|| {
                 info!("Tunnel thread started");
                 let mut reader_sync = 0;
@@ -108,11 +109,11 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                 }
                 let mut all_msgs: Vec<Message> = Vec::new(); // all the messages which are writen to the tunnel writer.
                 let mut msg_id = 1; // start messages from 1, so we can keep writer_sync from 0
+                let mut remove_sync = None;
                 loop {
                     let last_writer_sync = writer_sync;
                     let last_reader_sync = reader_sync;
                     // Reading tunnel input
-                    info!("Reading tunnel input: {}", reader_name);
                     match client.get_object(&reader, None) {
                         Ok(output) => {
                             let text = str::from_utf8(&output.body).unwrap();
@@ -143,11 +144,11 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                                 }
                             }
 
-                            sleep(Duration::from_millis(200));
+                            sleep(Duration::from_millis(800));
                         }
                         Err(_) => {
                             // if the file is missing, just wait until it is created
-                            info!("{} not found", reader_name);
+                            //info!("{} not found", reader_name);
                             sleep(Duration::from_millis(2000));
                         }
                     }
@@ -165,6 +166,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             all_msgs.clear();
                         } else {
                             // otherwise filter all older then writer_sync
+                            let len = all_msgs.len();
                             let tmp = all_msgs
                                 .drain(..)
                                 .filter(|msg| msg.id > writer_sync)
@@ -177,21 +179,25 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
 
                     let mut new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
 
+                    if last_reader_sync < reader_sync && remove_sync.is_none() {
+                        // We read another messages from the tunnel, let the other side know, we
+                        // have them and it doesn't need to send them anymore.
+                        let id = msg_id;
+                        msg_id += 1;
+                        all_msgs
+                            .push(Message {
+                                id,
+                                // For now, id of the connection is just 1, until multiple
+                                // connections are implemented.
+                                payload: Payload::Sync(1, reader_sync),
+                            });
+                        info!("Sending sync: {}", reader_sync);
+                        remove_sync = Some(id);
+                        is_change = true;
+                    }
+
                     if new_msgs.len() > 0 {
 
-                        if last_reader_sync < reader_sync {
-                            // We read another messages from the tunnel, let the other side know, we
-                            // have them and it doesn't need to send them anymore.
-                            let id = msg_id;
-                            msg_id += 1;
-                            all_msgs
-                                .push(Message {
-                                    id,
-                                    // For now, id of the connection is just 1, until multiple
-                                    // connections are implemented.
-                                    payload: Payload::Sync(1, reader_sync),
-                                });
-                        }
                         // if this is a server, and this is the first message to send, send connect
                         // first
                         if msg_id == 1 && is_server {
@@ -212,6 +218,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                                      .filter(|data| data.len()>0)
                                      .map(|data| {
                                          is_change = true;
+                                         remove_sync = None;
                                          let id = msg_id;
                                          msg_id += 1;
                                          Message {
@@ -230,8 +237,25 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                         stream_out.key = format!("{}/{}", bucket_prefix, writer_name);
                         stream_out.body = Some(&msg);
                         match client.put_object(&stream_out, None) {
-                            Ok(output) => info!( "{:#?}", output),
+                            Ok(_) => {
+                                info!("Writing {} messages up to id  {}", all_msgs.len(), msg_id - 1);
+                                writer_created = true;
+                            }
                             Err(e) => error!("{:#?}", e),
+                        }
+                    } else {
+                        if all_msgs.len() == 0 && writer_created {
+                            use aws_sdk_rust::aws::s3::object::{DeleteObjectRequest};
+                            let mut del = DeleteObjectRequest::default();
+                            del.bucket = bucket_name.clone();
+                            del.key = format!("{}/{}", bucket_prefix, writer_name);
+                            match client.delete_object(&del, None) {
+                                Ok(_) => {
+                                    info!( "Tunnel file {} is removed", writer_name);
+                                    writer_created = false;
+                                }
+                                Err(e) => error!("{:#?}", e),
+                            }
                         }
                     }
                 }
