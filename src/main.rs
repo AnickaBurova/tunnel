@@ -34,6 +34,7 @@ mod tools;
 mod config;
 mod messages;
 mod s3tunnel;
+mod tunnel;
 mod server;
 mod client;
 

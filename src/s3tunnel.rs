@@ -20,6 +20,11 @@ pub struct Tunnel {
     pub connection: Option<Receiver<u64>>,
 }
 
+pub struct Pipes {
+    pub writer: Sender<Message>,
+    pub reader: Receiver<Message>,
+}
+
 
 pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_name: &str) -> io::Result<Tunnel> {
     // create connection to s3

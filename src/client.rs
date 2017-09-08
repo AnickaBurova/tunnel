@@ -38,12 +38,9 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
                                 let data = buf[0..len].to_vec();
                                 let _ = io_res!(tunnel_writer.send(data))?;
                             }
-                            Err(_) => {
-                                break;
-                            }
+                            Err(_) => (),
                         }
                     }
-                    Ok(())
                 })
         })
 }

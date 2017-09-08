@@ -16,6 +16,7 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
     use std::io::{Write, Read};
     let port = &matches.value_of("server-port").unwrap();
     let address = format!("0.0.0.0:{}",port); // create connection to the ssh
+    info!("Creating server on: {}", address);
     TcpListener::bind(address)
         .and_then(move|listener| {
             listener
@@ -31,6 +32,7 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
                     socket
                         .set_read_timeout(Some(Duration::from_millis(250)))
                         .and_then(move |_| {
+                            info!("Starting the loop");
                             loop {
                                 for data in tunnel_reader.try_iter() {
                                     let _ = socket.write(&data);
@@ -40,12 +42,9 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
                                         let data = buf[0..len].to_vec();
                                         let _ = io_res!(tunnel_writer.send(data))?;
                                     }
-                                    Err(_) => {
-                                        break;
-                                    }
+                                    Err(_) => (),
                                 }
                             }
-                            Ok(())
                         })
                 })
         })
