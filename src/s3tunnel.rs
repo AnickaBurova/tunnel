@@ -2,7 +2,7 @@
  * File: src/s3tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 07.09.2017
+ * Last Modified Date: 08.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -70,11 +70,9 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             } else {
                 (None, None)
             };
-
-            use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
-            let mut reader = GetObjectRequest::default();
-            reader.bucket = bucket_name.clone();
-            reader.key = reader_name.into();
+            info!("Reading data from '{}'", reader_name);
+            info!("Writing data to '{}'", writer_name);
+            let reader_name: String = reader_name.into();
             use std::thread;
             use std::thread::sleep;
             use std::time::Duration;
@@ -82,6 +80,10 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             let _ = thread::spawn(move|| {
                 let mut reader_sync = 0;
                 let mut writer_sync = 0;
+                use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
+                let mut reader = GetObjectRequest::default();
+                reader.bucket = bucket_name.into();
+                reader.key = format!("{}/{}", bucket_prefix, reader_name);
                 loop {
                     let mut last_reader_sync = reader_sync;
                     match client.get_object(&reader, None) {
@@ -119,6 +121,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                         }
                         Err(e) => {
                             // if the file is missing, just wait until it is created
+                            info!("{} not found", reader_name);
                             sleep(Duration::from_millis(2000));
                         }
                     }
