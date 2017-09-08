@@ -2,7 +2,7 @@
  * File: src/server.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 07.09.2017
+ * Last Modified Date: 08.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -35,7 +35,6 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                                 }
                                 match socket.read(&mut buf) {
                                     Ok(len) => {
-                                        info!("Received {} data", len);
                                         let data = buf[0..len].to_vec();
                                         let _ = io_res!(tunnel_writer.send(data))?;
                                     }

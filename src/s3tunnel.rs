@@ -79,17 +79,36 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             use std::time::Duration;
             use std::str;
             let _ = thread::spawn(move|| {
+                info!("Tunnel thread started");
                 let mut reader_sync = 0;
                 let mut writer_sync = 0;
                 use aws_sdk_rust::aws::s3::object::{GetObjectRequest};
                 let mut reader = GetObjectRequest::default();
                 reader.bucket = bucket_name.clone();
                 reader.key = format!("{}/{}", bucket_prefix, reader_name);
+                // at the begining, remove tunnel files
+                if is_server {
+                    use aws_sdk_rust::aws::s3::object::{DeleteObjectRequest};
+                    let mut del = DeleteObjectRequest::default();
+                    del.bucket = bucket_name.clone();
+                    del.key = format!("{}/{}", bucket_prefix, reader_name);
+                    match client.delete_object(&del, None) {
+                        Ok(_) => info!( "Tunnel file {} is removed", reader_name),
+                        Err(e) => error!("{:#?}", e),
+                    }
+                    del.key = format!("{}/{}", bucket_prefix, writer_name);
+                    match client.delete_object(&del, None) {
+                        Ok(_) => info!( "Tunnel file {} is removed", writer_name),
+                        Err(e) => error!("{:#?}", e),
+                    }
+                }
                 let mut all_msgs: Vec<Message> = Vec::new(); // all the messages which are writen to the tunnel writer.
                 let mut msg_id = 1; // start messages from 1, so we can keep writer_sync from 0
                 loop {
                     let mut last_writer_sync = writer_sync;
                     let mut last_reader_sync = reader_sync;
+                    // Reading tunnel input
+                    info!("Reading tunnel input: {}", reader_name);
                     match client.get_object(&reader, None) {
                         Ok(output) => {
                             let text = str::from_utf8(&output.body).unwrap();
@@ -153,24 +172,23 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
 
                     let mut is_change = false;
 
-                    if last_reader_sync < reader_sync {
-                        // We read another messages from the tunnel, let the other side know, we
-                        // have them and it doesn't need to send them anymore.
-                        let id = msg_id;
-                        msg_id += 1;
-                        all_msgs
-                            .push(Message {
-                                id,
-                                // For now, id of the connection is just 1, until multiple
-                                // connections are implemented.
-                                payload: Payload::Sync(1, reader_sync),
-                            });
-                        is_change = true;
-                    }
-
                     let mut new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
 
                     if new_msgs.len() > 0 {
+
+                        if last_reader_sync < reader_sync {
+                            // We read another messages from the tunnel, let the other side know, we
+                            // have them and it doesn't need to send them anymore.
+                            let id = msg_id;
+                            msg_id += 1;
+                            all_msgs
+                                .push(Message {
+                                    id,
+                                    // For now, id of the connection is just 1, until multiple
+                                    // connections are implemented.
+                                    payload: Payload::Sync(1, reader_sync),
+                                });
+                        }
                         // if this is a server, and this is the first message to send, send connect
                         // first
                         if msg_id == 1 && is_server {
@@ -188,7 +206,9 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                         all_msgs
                             .extend( new_msgs
                                      .drain(..)
+                                     .filter(|data| data.len()>0)
                                      .map(|data| {
+                                         is_change = true;
                                          let id = msg_id;
                                          msg_id += 1;
                                          Message {
@@ -196,7 +216,6 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                                              payload: Payload::Data(1, data),
                                          }
                                      }));
-                        is_change = true;
                     }
 
                     if is_change {
@@ -215,7 +234,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
 
 
                     // keep max of 5 times per second
-                    sleep(Duration::from_millis(200));
+                    //sleep(Duration::from_millis(200));
                 }
             });
             //use std::sync::Arc;

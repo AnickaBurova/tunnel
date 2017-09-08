@@ -7,3 +7,5 @@
 log/
 tunnel.cfg
 .deploy_cmd
+.update_cmd
+target-musl/

@@ -18,7 +18,7 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
     let tunnel_connection = tunnel.connection.unwrap();
     let connection_id = tunnel_connection.recv().unwrap();
 
-    let address = format!("0.0.0.0:{}",4000); // create connection to the ssh
+    let address = format!("127.0.0.1:{}",22); // create connection to the ssh
     info!("Connecting...");
     TcpStream::connect(&address)
         .and_then(move |mut socket| {
@@ -33,7 +33,6 @@ pub fn run(tunnel: Tunnel) -> io::Result<()>{
                         }
                         match socket.read(&mut buf) {
                             Ok(len) => {
-                                info!("Received {} data", len);
                                 let data = buf[0..len].to_vec();
                                 let _ = io_res!(tunnel_writer.send(data))?;
                             }
