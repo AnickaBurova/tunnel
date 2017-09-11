@@ -2,7 +2,7 @@
  * File: src/client.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 08.09.2017
+ * Last Modified Date: 11.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -27,7 +27,7 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
             use std::time::Duration;
             let mut buf = [0;2048];
             socket
-                .set_read_timeout(Some(Duration::from_millis(250)))
+                .set_read_timeout(Some(Duration::from_millis(20)))
                 .and_then(move |_| {
                     loop {
                         for data in tunnel_reader.try_iter() {

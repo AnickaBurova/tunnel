@@ -132,13 +132,13 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             let stream: Vec<Message> = serde_yaml::from_str(text).unwrap();
 
                             let _ = reader_sender.send(ReadCommand::Read(stream)).unwrap();
-                            sleep(Duration::from_millis(800));
+                            //sleep(Duration::from_millis(800));
                         }
                         Err(_) => {
                             let _ = reader_sender.send(ReadCommand::NoFile).unwrap();
                             // if the file is missing, just wait until it is created
                             //info!("{} not found", reader_name);
-                            sleep(Duration::from_millis(2000));
+                            //sleep(Duration::from_millis(2000));
                         }
                     }
                 }

@@ -39,8 +39,6 @@ pub struct TunnelPipes {
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
     use std::thread;
-    use std::thread::sleep;
-    use std::time::Duration;
     use std::str;
     use serde_yaml;
 

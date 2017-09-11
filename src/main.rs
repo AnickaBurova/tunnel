@@ -34,6 +34,7 @@ mod tools;
 mod config;
 mod messages;
 mod s3tunnel;
+mod s3tunnel_cmd;
 mod tunnel;
 mod server;
 mod client;
@@ -51,7 +52,11 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
     };
     load_config()
         .and_then( |cfg| {
-            s3tunnel::create_clients(is_server, cfg, writer_name, reader_name)
+            let tunnel_api = &matches.value_of("tunnel-api").unwrap();
+            match tunnel_api {
+                &"s3cmd" => s3tunnel_cmd::create_clients(is_server, cfg, writer_name, reader_name),
+                _ => s3tunnel::create_clients(is_server, cfg, writer_name, reader_name),
+            }
         })
         .and_then( |tunnel_pipes| {
             tunnel::run(is_server, tunnel_pipes)
@@ -101,6 +106,11 @@ fn main() {
              .index(1)
              .possible_values(&["server", "client"])
              .required(true))
+        .arg(Arg::with_name("tunnel-api")
+             .long("tunnel-api")
+             .help("What tunnel client to use")
+             .possible_values(&["aws", "s3cmd"])
+             .default_value("aws"))
         .get_matches();
     let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
     let _ = s3run(&matches).unwrap();
