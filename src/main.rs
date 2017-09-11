@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 08.09.2017
+ * Last Modified Date: 11.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -52,6 +52,9 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
     load_config()
         .and_then( |cfg| {
             s3tunnel::create_clients(is_server, cfg, writer_name, reader_name)
+        })
+        .and_then( |tunnel_pipes| {
+            tunnel::run(is_server, tunnel_pipes)
         })
         .and_then( |tunnel| {
             if is_server {

@@ -7,7 +7,7 @@
  */
 
 
-use s3tunnel::Tunnel;
+use tunnel::Tunnel;
 use std::io::{self};
 use clap::ArgMatches;
 

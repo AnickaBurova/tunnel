@@ -6,7 +6,7 @@
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
-use s3tunnel::Tunnel;
+use tunnel::Tunnel;
 use std::io::{self};
 use clap::ArgMatches;
 
