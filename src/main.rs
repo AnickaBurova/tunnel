@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 11.09.2017
+ * Last Modified Date: 12.09.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -84,6 +84,7 @@ fn main() {
              .default_value("log.yaml")
             )
         .arg(Arg::with_name("server-port")
+             .help("What port to listen on")
              .long("server-port")
              .short("p")
              .takes_value(true)

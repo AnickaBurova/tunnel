@@ -1,6 +1,6 @@
 [root]
 name = "tunnel"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aws-sdk-rust 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
