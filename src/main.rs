@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 11.09.2017
+ * Last Modified Date: 06.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -79,36 +79,37 @@ fn main() {
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .arg(Arg::with_name("log-config")
              .long("log-config")
-             .help("Log configuration")
+             .help("Log configuration file.")
              .takes_value(true)
              .default_value("log.yaml")
             )
         .arg(Arg::with_name("server-port")
              .long("server-port")
+             .help("Port to listen on.")
              .short("p")
              .takes_value(true)
              .default_value("1234")
              .validator(|val| val.parse::<u16>().map(|_| ()).map_err(|_| format!("Cannot parse {} to u16", val))))
         .arg(Arg::with_name("client-address")
              .long("client-address")
-             .help("Address where to connect on a new connection for the client mode")
+             .help("Address where to connect on a new connection for the client mode.")
              .takes_value(true)
              .default_value("127.0.0.1")
             )
         .arg(Arg::with_name("client-port")
              .long("client-port")
-             .help("Port where to connect on a new connection for the client mode")
+             .help("Port where to connect on a new connection for the client mode.")
              .takes_value(true)
              .default_value("22")
              .validator(|val| val.parse::<u16>().map(|_| ()).map_err(|_| format!("Cannot parse {} to u16", val))))
         .arg(Arg::with_name("mode")
-             .help("What mode to run the tunnel in")
+             .help("Server or client mode.")
              .index(1)
              .possible_values(&["server", "client"])
              .required(true))
         .arg(Arg::with_name("tunnel-api")
              .long("tunnel-api")
-             .help("What tunnel client to use")
+             .help("Aws or s3cmd tunnel api communication.")
              .possible_values(&["aws", "s3cmd"])
              .default_value("aws"))
         .get_matches();
