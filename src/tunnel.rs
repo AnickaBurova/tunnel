@@ -68,6 +68,29 @@ fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, wri
     }
 }
 
+fn tidyup_msgs(last_writer_sync: usize, writer_sync: usize, all_msgs: &mut Vec<Message>) {
+    if last_writer_sync < writer_sync {
+        // the other side has read messages up to writer_sync, we can
+        // filter them out
+        let remove_all = all_msgs
+            .last()
+            .map(|last| last.id == writer_sync )
+            .unwrap_or(false);
+        // little performance improvement in case we can just clear all the
+        // messages
+        if remove_all {
+            all_msgs.clear();
+        } else {
+            // otherwise filter all older then writer_sync
+            let tmp = all_msgs
+                .drain(..)
+                .filter(|msg| msg.id > writer_sync)
+                .collect();
+            *all_msgs = tmp;
+        }
+    }
+}
+
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
     use std::thread;
@@ -100,26 +123,7 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
             // Reading tunnel input
             read_tunnel(&reader_pipe, &mut reader_sync, &mut writer_sync, &connection_sender, &reader_sender);
 
-            if last_writer_sync < writer_sync {
-                // the other side has read messages up to writer_sync, we can
-                // filter them out
-                let remove_all = all_msgs
-                    .last()
-                    .map(|last| last.id == writer_sync )
-                    .unwrap_or(false);
-                // little performance improvement in case we can just clear all the
-                // messages
-                if remove_all {
-                    all_msgs.clear();
-                } else {
-                    // otherwise filter all older then writer_sync
-                    let tmp = all_msgs
-                        .drain(..)
-                        .filter(|msg| msg.id > writer_sync)
-                        .collect();
-                    all_msgs = tmp;
-                }
-            }
+            tidyup_msgs(last_writer_sync, writer_sync, &mut all_msgs);
 
             let mut is_change = false;
 
