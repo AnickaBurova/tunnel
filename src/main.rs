@@ -44,18 +44,19 @@ use clap::ArgMatches;
 
 fn s3run(matches: &ArgMatches) -> io::Result<()> {
     let mode = &matches.value_of("mode").unwrap();
+    let file_name = matches.value_of("tunnel-file-name").unwrap();
     let is_server = mode == &"server";
     let (writer_name , reader_name ) = if is_server {
-        ("tunnel.in", "tunnel.out")
+        (format!("{}.in",  file_name), format!("{}.out", file_name))
     } else {
-        ("tunnel.out", "tunnel.in")
+        (format!("{}.out", file_name), format!("{}.in",  file_name))
     };
     load_config()
         .and_then( |cfg| {
             let tunnel_api = &matches.value_of("tunnel-api").unwrap();
             match tunnel_api {
-                &"s3cmd" => s3tunnel_cmd::create_clients(is_server, cfg, writer_name, reader_name),
-                _ => s3tunnel::create_clients(is_server, cfg, writer_name, reader_name),
+                &"s3cmd" => s3tunnel_cmd::create_clients(is_server, cfg, &writer_name, &reader_name),
+                _        => s3tunnel::create_clients(is_server,     cfg, &writer_name, &reader_name),
             }
         })
         .and_then( |tunnel_pipes| {
@@ -113,6 +114,10 @@ fn main() {
              .help("Aws or s3cmd tunnel api communication.")
              .possible_values(&["aws", "s3cmd"])
              .default_value("aws"))
+        .arg(Arg::with_name("tunnel-file-name")
+            .help("Name of the files to use for transfer data: tunnel.in tunnel.out, this is just the name, not the extension.")
+            .long("tunnel-file-name")
+            .default_value("tunnel"))
         .get_matches();
     let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
     let _ = s3run(&matches).unwrap();

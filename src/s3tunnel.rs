@@ -18,6 +18,7 @@ use aws_sdk_rust::aws::s3::object::{ GetObjectRequest, PutObjectRequest};
 
 macro_rules! delete_files {
     ($client: ident, $bucket_name: ident, $bucket_prefix: ident, $files: expr) => {
+        use aws_sdk_rust::aws::s3::object::{ DeleteObjectRequest};
         let mut del = DeleteObjectRequest::default();
         del.bucket = $bucket_name.clone();
         for file in $files.iter() {
@@ -30,9 +31,7 @@ macro_rules! delete_files {
     }
 }
 
-pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_name: &str)
-    -> io::Result<TunnelPipes> {
-    //-> io::Result<()> {
+pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_name: &str) -> io::Result<TunnelPipes> {
     // create connection to s3
     let access_key = cfg.access_key;
     let bucket_name = cfg.bucket_name;

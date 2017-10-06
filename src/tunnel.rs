@@ -33,6 +33,40 @@ pub struct TunnelPipes {
     pub reader: Receiver<ReadCommand>,
 }
 
+fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, writer_sync: &mut usize, connection_sender: &Option<Sender<u64>>, reader_sender: &Sender<Vec<u8>>) {
+    for msg in reader_pipe.try_iter() {
+        match msg {
+            ReadCommand::NoFile => (),
+            ReadCommand::Read(mut stream) => {
+                for msg in stream.drain(..) {
+                    if *reader_sync >= msg.id {
+                        // if id of the message has already been processed
+                        continue;
+                    }
+                    *reader_sync = msg.id;
+                    match msg.payload {
+                        Payload::Connect(id) => {
+                            // start a connection!
+                            info!("Got connection");
+                            match connection_sender.as_ref() {
+                                Some(ref connection_sender) => connection_sender.send(id).unwrap(),
+                                None => (),
+                            }
+                        }
+                        Payload::Data(_, data) => {
+                            info!("Got data");
+                            reader_sender.send(data).unwrap();
+                        }
+                        Payload::Sync(_id, last_msg) => {
+                            info!("Got sync: {}", last_msg);
+                            *writer_sync = last_msg;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
@@ -64,38 +98,7 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
             let last_writer_sync = writer_sync;
             let last_reader_sync = reader_sync;
             // Reading tunnel input
-            for msg in reader_pipe.try_iter() {
-                match msg {
-                    ReadCommand::NoFile => (),
-                    ReadCommand::Read(mut stream) => {
-                        for msg in stream.drain(..) {
-                            if reader_sync >= msg.id {
-                                // if id of the message has already been processed
-                                continue;
-                            }
-                            reader_sync = msg.id;
-                            match msg.payload {
-                                Payload::Connect(id) => {
-                                    // start a connection!
-                                    info!("Got connection");
-                                    match connection_sender.as_ref() {
-                                        Some(ref connection_sender) => connection_sender.send(id).unwrap(),
-                                        None => (),
-                                    }
-                                }
-                                Payload::Data(_, data) => {
-                                    info!("Got data");
-                                    reader_sender.send(data).unwrap();
-                                }
-                                Payload::Sync(_id, last_msg) => {
-                                    info!("Got sync: {}", last_msg);
-                                    writer_sync = last_msg;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            read_tunnel(&reader_pipe, &mut reader_sync, &mut writer_sync, &connection_sender, &reader_sender);
 
             if last_writer_sync < writer_sync {
                 // the other side has read messages up to writer_sync, we can
