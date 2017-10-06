@@ -91,6 +91,27 @@ fn tidyup_msgs(last_writer_sync: usize, writer_sync: usize, all_msgs: &mut Vec<M
     }
 }
 
+fn resync_msg(last_reader_sync: usize, reader_sync: usize, remove_sync: &mut Option<usize>, msg_id: &mut usize, all_msgs: &mut Vec<Message>) -> bool {
+    if last_reader_sync < reader_sync && remove_sync.is_none() {
+        // We read another messages from the tunnel, let the other side know, we
+        // have them and it doesn't need to send them anymore.
+        let id = *msg_id;
+        *msg_id += 1;
+        all_msgs
+            .push(Message {
+                id,
+                // For now, id of the connection is just 1, until multiple
+                // connections are implemented.
+                payload: Payload::Sync(1, reader_sync),
+            });
+        info!("Sending sync: {}", reader_sync);
+        *remove_sync = Some(id);
+        true
+    } else {
+        false
+    }
+}
+
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
     use std::thread;
@@ -125,27 +146,9 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
 
             tidyup_msgs(last_writer_sync, writer_sync, &mut all_msgs);
 
-            let mut is_change = false;
-
             let mut new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
 
-            if last_reader_sync < reader_sync && remove_sync.is_none() {
-                // We read another messages from the tunnel, let the other side know, we
-                // have them and it doesn't need to send them anymore.
-                let id = msg_id;
-                msg_id += 1;
-                all_msgs
-                    .push(Message {
-                        id,
-                        // For now, id of the connection is just 1, until multiple
-                        // connections are implemented.
-                        payload: Payload::Sync(1, reader_sync),
-                    });
-                info!("Sending sync: {}", reader_sync);
-                remove_sync = Some(id);
-                is_change = true;
-            }
-
+            let mut is_change = resync_msg(last_reader_sync, reader_sync, &mut remove_sync, &mut msg_id, &mut all_msgs);
             if new_msgs.len() > 0 {
 
                 // if this is a server, and this is the first message to send, send connect
