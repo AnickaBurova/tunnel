@@ -2,7 +2,7 @@
  * File: src/s3tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 11.09.2017
+ * Last Modified Date: 06.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -14,7 +14,7 @@ use std::sync::mpsc::{channel};
 
 use tunnel::*;
 use messages::*;
-use aws_sdk_rust::aws::s3::object::{DeleteObjectRequest, GetObjectRequest, PutObjectRequest};
+use aws_sdk_rust::aws::s3::object::{ GetObjectRequest, PutObjectRequest};
 
 macro_rules! delete_files {
     ($client: ident, $bucket_name: ident, $bucket_prefix: ident, $files: expr) => {
@@ -87,9 +87,6 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             let (reader_sender, reader_receiver) = channel::<ReadCommand>();
 
             use std::thread;
-            use std::thread::sleep;
-            use std::time::Duration;
-            use std::sync::{Arc, Mutex};
 
             info!("Reading data from '{}'", reader_name);
             info!("Writing data to '{}'", writer_name);

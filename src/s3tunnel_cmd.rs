@@ -2,7 +2,7 @@
  * File: src/s3tunnel_cmd.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 11.09.2017
- * Last Modified Date: 11.09.2017
+ * Last Modified Date: 06.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -55,9 +55,6 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
     let (reader_sender, reader_receiver) = channel::<ReadCommand>();
 
     use std::thread;
-    use std::thread::sleep;
-    use std::time::Duration;
-    use std::sync::{Arc, Mutex};
 
     info!("Reading data from '{}'", reader_name);
     info!("Writing data to '{}'", writer_name);
@@ -70,7 +67,6 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             delete_files!( bucket_name, bucket_prefix, vec![&reader_name, &writer_name]);
         }
         let reader = format!("s3://{}/{}/{}", bucket_name, bucket_prefix, reader_name);
-        let writer = format!("s3://{}/{}/{}", bucket_name, bucket_prefix, writer_name);
         let bucket_place = format!("s3://{}/{}/", bucket_name, bucket_prefix);
         loop {
             for cmd in writer_receiver.try_iter() {

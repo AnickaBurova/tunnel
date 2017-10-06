@@ -2,7 +2,7 @@
  * File: src/tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 08.09.2017
- * Last Modified Date: 11.09.2017
+ * Last Modified Date: 06.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -15,8 +15,6 @@ pub struct Tunnel {
     pub reader: Receiver<Vec<u8>>,
     pub connection: Option<Receiver<u64>>,
 }
-
-use std::sync::{Arc, Mutex};
 
 pub enum WriteCommand {
     /// Write these messages to the tunnel
