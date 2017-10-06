@@ -68,7 +68,7 @@ fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, wri
     }
 }
 
-fn tidyup_msgs(last_writer_sync: usize, writer_sync: usize, all_msgs: &mut Vec<Message>) {
+fn tidy_up_msgs(last_writer_sync: usize, writer_sync: usize, all_msgs: &mut Vec<Message>) {
     if last_writer_sync < writer_sync {
         // the other side has read messages up to writer_sync, we can
         // filter them out
@@ -112,6 +112,42 @@ fn resync_msg(last_reader_sync: usize, reader_sync: usize, remove_sync: &mut Opt
     }
 }
 
+fn add_msgs(is_change: bool, is_server: bool, new_msgs: Vec<Vec<u8>>, all_msgs: &mut Vec<Message>, remove_sync: &mut Option<usize>, msg_id: &mut usize) -> bool {
+    let mut new_msgs = new_msgs;
+    let mut is_change = is_change;
+    if new_msgs.len() > 0 {
+        // if this is a server, and this is the first message to send, send connect
+        // first
+        if *msg_id == 1 && is_server {
+            let id = *msg_id;
+            *msg_id += 1;
+            all_msgs
+                .push(Message {
+                    id,
+                    // For now, id of the connection is just 1, until multiple
+                    // connections are implemented.
+                    payload: Payload::Connect(1),
+                });
+        }
+        // add the new messages to all
+        all_msgs
+            .extend( new_msgs
+                     .drain(..)
+                     .filter(|data| data.len()>0)
+                     .map(|data| {
+                         is_change = true;
+                         *remove_sync = None;
+                         let id = *msg_id;
+                         *msg_id += 1;
+                         Message {
+                             id,
+                             payload: Payload::Data(1, data),
+                         }
+                     }));
+    }
+    is_change
+}
+
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
     use std::thread;
@@ -144,42 +180,13 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
             // Reading tunnel input
             read_tunnel(&reader_pipe, &mut reader_sync, &mut writer_sync, &connection_sender, &reader_sender);
 
-            tidyup_msgs(last_writer_sync, writer_sync, &mut all_msgs);
-
-            let mut new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+            tidy_up_msgs(last_writer_sync, writer_sync, &mut all_msgs);
 
             let mut is_change = resync_msg(last_reader_sync, reader_sync, &mut remove_sync, &mut msg_id, &mut all_msgs);
-            if new_msgs.len() > 0 {
 
-                // if this is a server, and this is the first message to send, send connect
-                // first
-                if msg_id == 1 && is_server {
-                    let id = msg_id;
-                    msg_id += 1;
-                    all_msgs
-                        .push(Message {
-                            id,
-                            // For now, id of the connection is just 1, until multiple
-                            // connections are implemented.
-                            payload: Payload::Connect(1),
-                        });
-                }
-                // add the new messages to all
-                all_msgs
-                    .extend( new_msgs
-                             .drain(..)
-                             .filter(|data| data.len()>0)
-                             .map(|data| {
-                                 is_change = true;
-                                 remove_sync = None;
-                                 let id = msg_id;
-                                 msg_id += 1;
-                                 Message {
-                                     id,
-                                     payload: Payload::Data(1, data),
-                                 }
-                             }));
-            }
+            let new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+
+            is_change = add_msgs(is_change, is_server, new_msgs, &mut all_msgs, &mut remove_sync, &mut msg_id);
 
             if is_change {
                 let msg = serde_yaml::to_string(&all_msgs).unwrap();
