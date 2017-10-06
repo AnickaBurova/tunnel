@@ -18,7 +18,6 @@ use aws_sdk_rust::aws::s3::object::{ GetObjectRequest, PutObjectRequest};
 
 macro_rules! delete_files {
     ($client: ident, $bucket_name: ident, $bucket_prefix: ident, $files: expr) => {
-        use aws_sdk_rust::aws::s3::object::{DeleteObjectRequest};
         let mut del = DeleteObjectRequest::default();
         del.bucket = $bucket_name.clone();
         for file in $files.iter() {
@@ -87,7 +86,6 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             let (reader_sender, reader_receiver) = channel::<ReadCommand>();
 
             use std::thread;
-
             info!("Reading data from '{}'", reader_name);
             info!("Writing data to '{}'", writer_name);
             // create thread own variables to avoid lifetime errors

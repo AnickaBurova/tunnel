@@ -84,6 +84,7 @@ fn main() {
              .default_value("log.yaml")
             )
         .arg(Arg::with_name("server-port")
+             .help("What port to listen on")
              .long("server-port")
              .help("Port to listen on.")
              .short("p")
