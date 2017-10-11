@@ -2,7 +2,7 @@
  * File: src/messages.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 07.09.2017
+ * Last Modified Date: 11.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -10,9 +10,10 @@
 #[derive (Debug, Serialize, Deserialize)]
 pub enum Payload {
     /// When there is a new connection to the server, it will send 'Connect' request with a new id.
-    Connect(u64),
+    Connect(u64,String,u16),
+    Disconnect(u64),
     /// Pass data for specific connection.
-    Data(usize, Vec<u8>),
+    Data(u64, Vec<u8>),
     /// Send information which last message the other side has received. Sender can stop sending
     /// that through the tunnel.
     Sync(u64, usize),

@@ -2,7 +2,7 @@
  * File: src/main.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 04.09.2017
- * Last Modified Date: 06.10.2017
+ * Last Modified Date: 09.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 extern crate aws_sdk_rust;
@@ -38,6 +38,7 @@ mod s3tunnel_cmd;
 mod tunnel;
 mod server;
 mod client;
+mod connection;
 
 use config::*;
 use clap::ArgMatches;

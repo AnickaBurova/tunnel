@@ -12,8 +12,7 @@ root:
   appenders:
     - stdout
 loggers:
-  server:
-    level: trace
+  tunnel:
+    level: debug
     appenders:
-      - requests
       - stdout

@@ -2,7 +2,7 @@
  * File: src/tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 08.09.2017
- * Last Modified Date: 06.10.2017
+ * Last Modified Date: 11.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -10,10 +10,23 @@ use messages::*;
 use std::sync::mpsc::{Sender, Receiver};
 use std::io::{self};
 
+type NewConnection = (u64, String, u16);
+
+pub enum WriterData {
+    Connect(u64, String, u16),
+    Disconnect(u64),
+    Data(u64, Vec<u8>),
+}
+
+pub enum ReaderData {
+    Disconnect,
+    Data(Vec<u8>),
+}
+
 pub struct Tunnel {
-    pub writer: Sender<Vec<u8>>,
-    pub reader: Receiver<Vec<u8>>,
-    pub connection: Option<Receiver<u64>>,
+    pub writer: Sender<WriterData>,
+    pub reader: Receiver<(u64, ReaderData)>,
+    pub connection: Option<Receiver<NewConnection>>,
 }
 
 pub enum WriteCommand {
@@ -33,7 +46,7 @@ pub struct TunnelPipes {
     pub reader: Receiver<ReadCommand>,
 }
 
-fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, writer_sync: &mut usize, connection_sender: &Option<Sender<u64>>, reader_sender: &Sender<Vec<u8>>) {
+fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, writer_sync: &mut usize, connection_sender: &Option<Sender<NewConnection>>, reader_sender: &Sender<(u64, ReaderData)>) {
     for msg in reader_pipe.try_iter() {
         match msg {
             ReadCommand::NoFile => (),
@@ -45,17 +58,21 @@ fn read_tunnel(reader_pipe: &Receiver<ReadCommand>, reader_sync: &mut usize, wri
                     }
                     *reader_sync = msg.id;
                     match msg.payload {
-                        Payload::Connect(id) => {
+                        Payload::Connect(id,ip,port) => {
                             // start a connection!
-                            info!("Got connection");
+                            info!("[{}] Got connection request from the tunnel to {}:{}", id, ip, port);
                             match connection_sender.as_ref() {
-                                Some(ref connection_sender) => connection_sender.send(id).unwrap(),
+                                Some(ref connection_sender) => connection_sender.send((id,ip,port)).unwrap(),
                                 None => (),
                             }
                         }
-                        Payload::Data(_, data) => {
-                            info!("Got data");
-                            reader_sender.send(data).unwrap();
+                        Payload::Disconnect(id) => {
+                            info!("[{}] got disconnection request from the tunnel", id);
+                            reader_sender.send((id,ReaderData::Disconnect)).unwrap();
+                        }
+                        Payload::Data(id, data) => {
+                            info!("[{}] Got data", id);
+                            reader_sender.send((id,ReaderData::Data(data))).unwrap();
                         }
                         Payload::Sync(_id, last_msg) => {
                             info!("Got sync: {}", last_msg);
@@ -112,40 +129,38 @@ fn resync_msg(last_reader_sync: usize, reader_sync: usize, remove_sync: &mut Opt
     }
 }
 
-fn add_msgs(is_change: bool, is_server: bool, new_msgs: Vec<Vec<u8>>, all_msgs: &mut Vec<Message>, remove_sync: &mut Option<usize>, msg_id: &mut usize) -> bool {
-    let mut new_msgs = new_msgs;
-    let mut is_change = is_change;
-    if new_msgs.len() > 0 {
-        // if this is a server, and this is the first message to send, send connect
-        // first
-        if *msg_id == 1 && is_server {
+fn add_msgs(is_change: bool,  writer_receiver: &Receiver<WriterData>, all_msgs: &mut Vec<Message>, remove_sync: &mut Option<usize>, msg_id: &mut usize) -> bool {
+    let saved_len = all_msgs.len();
+    all_msgs.extend(
+        writer_receiver
+        .try_iter()
+        .map(|msg| {
             let id = *msg_id;
             *msg_id += 1;
-            all_msgs
-                .push(Message {
-                    id,
-                    // For now, id of the connection is just 1, until multiple
-                    // connections are implemented.
-                    payload: Payload::Connect(1),
-                });
-        }
-        // add the new messages to all
-        all_msgs
-            .extend( new_msgs
-                     .drain(..)
-                     .filter(|data| data.len()>0)
-                     .map(|data| {
-                         is_change = true;
-                         *remove_sync = None;
-                         let id = *msg_id;
-                         *msg_id += 1;
-                         Message {
-                             id,
-                             payload: Payload::Data(1, data),
-                         }
-                     }));
+            match msg {
+                WriterData::Connect(connection, ip , port) =>
+                    Message {
+                     id,
+                     payload: Payload::Connect(connection, ip, port),
+                    },
+                WriterData::Disconnect(connection) =>
+                    Message {
+                        id,
+                        payload: Payload::Disconnect(connection),
+                    },
+                WriterData::Data(connection,data) =>
+                    Message {
+                     id,
+                     payload: Payload::Data(connection, data),
+                    },
+            }
+        }));
+    if saved_len < all_msgs.len() {
+        *remove_sync = None;
+        true
+    } else {
+        is_change
     }
-    is_change
 }
 
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
@@ -154,7 +169,7 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::str;
     use serde_yaml;
 
-    let (writer_sender, writer_receiver) = channel::<Vec<u8>>();
+    let (writer_sender, writer_receiver) = channel::<WriterData>();
     let (reader_sender, reader_receiver) = channel();
     let (connection_sender, connection_receiver) = if !is_server {
         let (sender, receiver) = channel();
@@ -184,9 +199,9 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
 
             let mut is_change = resync_msg(last_reader_sync, reader_sync, &mut remove_sync, &mut msg_id, &mut all_msgs);
 
-            let new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
+            //let new_msgs = writer_receiver.try_iter().collect::<Vec<Vec<u8>>>();
 
-            is_change = add_msgs(is_change, is_server, new_msgs, &mut all_msgs, &mut remove_sync, &mut msg_id);
+            is_change = add_msgs(is_change, &writer_receiver, &mut all_msgs, &mut remove_sync, &mut msg_id);
 
             if is_change {
                 let msg = serde_yaml::to_string(&all_msgs).unwrap();
