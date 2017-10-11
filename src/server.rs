@@ -79,7 +79,9 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
     Ok(())
 }
 
-fn prompt(ip: Arc<Mutex<String>>, port: Arc<Mutex<u16>>) {
+fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
+    let mut client_ip = client_ip;
+    let mut client_port = client_port;
     let mut rl = Editor::<()>::new();
     if let Err(_) = rl.load_history(".history.txt") {
         warn!("No previous history");
@@ -94,6 +96,13 @@ fn prompt(ip: Arc<Mutex<String>>, port: Arc<Mutex<u16>>) {
                     Ok(matches) =>
                         match matches.subcommand_name() {
                             Some("connect") => {
+                                let matches = matches.subcommand_matches("connect").unwrap();
+                                let mut client_ip = client_ip.lock().unwrap();
+                                let ip = matches.value_of("ip").unwrap();
+                                *client_ip = ip.to_owned();
+                                let mut client_port = client_port.lock().unwrap();
+                                let port = value_t!(matches, "port", u16).unwrap();
+                                *client_port = port;
                             },
                             _ => {
                                 println!("Unknown command");
