@@ -39,7 +39,7 @@ pub fn manage_clients(tunnel_reader: Receiver<(u64, ReaderData)>) -> Sender<Clie
                     Some(sender)   => {
                         match sender.send(data) {
                             Ok(_)  => (),
-                            Err(e) => error!("Failed to send the data to appropriate client, this should never happen!"),
+                            Err(e) => error!("Failed to send the data to appropriate client, this should never happen! {:?}", e),
                         }
                     }
                     None           => error!("Received a data from the tunnel for not existing client id: {}", id),
