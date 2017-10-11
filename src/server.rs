@@ -72,8 +72,90 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
             .unwrap();
     });
 
+    prompt(client_ip, client_port);
 
     info!("Server finished");
 
     Ok(())
+}
+
+fn prompt(ip: Arc<Mutex<String>>, port: Arc<Mutex<u16>>) {
+    let mut rl = Editor::<()>::new();
+    if let Err(_) = rl.load_history(".history.txt") {
+        warn!("No previous history");
+    }
+
+    loop {
+        match rl.readline(">> ") {
+            Ok(line) => {
+                let args: Vec<&str> = line.split(char::is_whitespace).collect();
+                let parser = create_parser();
+                match parser.get_matches_from_safe(args) {
+                    Ok(matches) =>
+                        match matches.subcommand_name() {
+                            Some("connect") => {
+                            },
+                            _ => {
+                                println!("Unknown command");
+                            }
+                        },
+                    Err(e) => {
+                        println!("{}", e.message);
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                info!("CTRL-C");
+                break
+            },
+            Err(ReadlineError::Eof) => {
+                info!("CTRL-D");
+                break
+            },
+            Err(err) => {
+                error!("Error: {:?}", err);
+                break
+            }
+        }
+    }
+
+    rl.save_history(".history.txt").unwrap();
+
+}
+
+use std::str::{self};
+
+fn is_val<T: str::FromStr>(x: String) -> Result<(), String> {
+     x.parse::<T>()
+         .and_then(|_| Ok(()))
+         .or_else(|_| Err(format!("Cannot parse {}", x)))
+}
+
+use clap::{App};
+
+fn create_parser() -> App<'static, 'static> {
+    use clap::{Arg, AppSettings, SubCommand};
+    App::new(env!("CARGO_PKG_NAME"))
+        .version(crate_version!())
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .setting(AppSettings::NoBinaryName)
+        .subcommand(SubCommand::with_name("connect")
+                    .about("Connect to the addres.")
+                    .arg(Arg::with_name("ip")
+                         .help("ip address to connect to")
+                         .index(1)
+                         .required(true)
+                         )
+                    .arg(Arg::with_name("port")
+                         .help("port to connect to")
+                         .index(2)
+                         .required(true)
+                         .validator(is_val::<u16>)
+                         )
+                    )
+        //.arg(Arg::with_name("tunnel-file-name")
+            //.help("Name of the files to use for transfer data: tunnel.in tunnel.out, this is just the name, not the extension.")
+            //.long("tunnel-file-name")
+            //.default_value("tunnel"))
 }
