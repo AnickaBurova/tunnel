@@ -31,6 +31,15 @@ extern crate serde_yaml;
 
 use std::io::{self};
 
+macro_rules! wait_little {
+    () => {
+        use std::thread::sleep;
+        use std::time::Duration;
+        sleep(Duration::from_millis(10));
+    }
+}
+
+
 #[macro_use]
 mod tools;
 mod config;

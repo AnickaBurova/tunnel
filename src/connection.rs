@@ -45,6 +45,7 @@ pub fn manage_clients(tunnel_reader: Receiver<(u64, ReaderData)>) -> Sender<Clie
                     None           => error!("Received a data from the tunnel for not existing client id: {}", id),
                 }
             }
+            wait_little!();
         }
     });
 
@@ -91,6 +92,7 @@ pub fn run_connection(tunnel_writer: Sender<WriterData>, id: u64, client_state_s
                             }
                         }
                     }
+                    wait_little!();
                 }
                 let _ = tunnel_writer.send(WriterData::Disconnect(id)).unwrap();
                 Ok(())

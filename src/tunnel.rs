@@ -214,6 +214,7 @@ pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
                     writer_created = false;
                 }
             }
+            wait_little!();
         }
     });
 

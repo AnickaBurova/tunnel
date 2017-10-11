@@ -2,7 +2,7 @@
  * File: src/s3tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
  * Date: 07.09.2017
- * Last Modified Date: 06.10.2017
+ * Last Modified Date: 11.10.2017
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
@@ -135,6 +135,8 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             //sleep(Duration::from_millis(2000));
                         }
                     }
+
+                    wait_little!();
                 }
             });
 
