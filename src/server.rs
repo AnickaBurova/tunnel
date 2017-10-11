@@ -80,8 +80,6 @@ pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
 }
 
 fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
-    let mut client_ip = client_ip;
-    let mut client_port = client_port;
     let mut rl = Editor::<()>::new();
     if let Err(_) = rl.load_history(".history.txt") {
         warn!("No previous history");
