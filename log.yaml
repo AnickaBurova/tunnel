@@ -7,10 +7,10 @@ appenders:
     path: "log/requests.log"
     encoder:
       pattern: "{d} - {m}{n}"
-root:
-  level: info
-  appenders:
-    - stdout
+#root:
+  #level: info
+  #appenders:
+    #- stdout
 loggers:
   tunnel:
     level: debug

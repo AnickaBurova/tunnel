@@ -27,6 +27,9 @@ use std::io::{self};
 pub fn load_config() -> io::Result<S3Config> {
     use std::fs::File;
     File::open("tunnel.cfg")
+        .map_err(|err| {
+            io::Error::new(err.kind(), format!("Failed to load tunnel.cfg: {}", err))
+        })
         .and_then(|file| {
             info!("Loading");
             use serde_yaml;

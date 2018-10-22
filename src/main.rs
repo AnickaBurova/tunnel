@@ -83,6 +83,18 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
         })
 }
 
+macro_rules! check {
+    ($cmd: expr) => {
+        match $cmd {
+            Ok(_) => (),
+            Err(err) => {
+                eprintln!("Failed: {}", err);
+                return;
+            }
+        }
+    }
+}
+
 
 fn main() {
     use clap::{App,Arg};
@@ -131,6 +143,6 @@ fn main() {
             .long("tunnel-file-name")
             .default_value("tunnel"))
         .get_matches();
-    let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()).unwrap();
-    let _ = s3run(&matches).unwrap();
+    check!(log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default()));
+    check!(s3run(&matches));
 }
