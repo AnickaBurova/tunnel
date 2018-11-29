@@ -166,7 +166,6 @@ fn add_msgs(is_change: bool,  writer_receiver: &Receiver<WriterData>, all_msgs: 
 pub fn run(is_server: bool, pipes: TunnelPipes) -> io::Result<Tunnel> {
     use std::sync::mpsc::{channel};
     use std::thread;
-    use std::str;
     use serde_yaml;
 
     let (writer_sender, writer_receiver) = channel::<WriterData>();

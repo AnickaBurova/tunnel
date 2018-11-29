@@ -9,7 +9,6 @@
 
 use tunnel::{Tunnel, WriterData};
 use std::io::{self};
-use clap::ArgMatches;
 use connection::{manage_clients, run_connection};
 use std::thread;
 
@@ -18,17 +17,14 @@ use rustyline::Editor;
 
 use std::sync::{Arc, Mutex};
 
-pub fn run(matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
+pub fn run(port: u16, client_ip: String, client_port: u16, tunnel: Tunnel) -> io::Result<()>{
     use std::net::{TcpListener};
-    let port = &matches.value_of("server-port").unwrap();
     let address = format!("0.0.0.0:{}",port);
     info!("Creating server on: {}", address);
     let client_ip = {
-        let client_ip = &matches.value_of("client-address").unwrap();
-        Arc::new(Mutex::new(client_ip.to_string()))
+        Arc::new(Mutex::new(client_ip))
     };
     let client_port = {
-        let client_port = value_t!(matches, "client-port", u16).unwrap();
         Arc::new(Mutex::new(client_port))
     };
 
@@ -148,14 +144,14 @@ fn create_parser() -> App<'static, 'static> {
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .setting(AppSettings::NoBinaryName)
         .subcommand(SubCommand::with_name("connect")
-                    .about("Connect to the addres.")
+                    .about("Connect to the address.")
                     .arg(Arg::with_name("ip")
                          .help("ip address to connect to")
                          .index(1)
                          .required(true)
                          )
                     .arg(Arg::with_name("port")
-                         .help("port to connect to")
+                         .help("port to listen on this machine")
                          .index(2)
                          .required(true)
                          .validator(is_val::<u16>)

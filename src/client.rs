@@ -8,11 +8,10 @@
 
 use tunnel::Tunnel;
 use std::io::{self};
-use clap::ArgMatches;
 use connection::{manage_clients, run_connection};
 
 
-pub fn run(_matches: &ArgMatches, tunnel: Tunnel) -> io::Result<()>{
+pub fn run(tunnel: Tunnel) -> io::Result<()>{
     use std::net::TcpStream;
     let tunnel_reader = tunnel.reader;
     let tunnel_writer = tunnel.writer;
