@@ -1,3 +1,6 @@
+use config::S3Config;
+use messages::*;
+use serde_yaml;
 /**
  * File: src/s3tunnel_cmd.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
@@ -6,13 +9,10 @@
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
-use std::io::{self};
-use serde_yaml;
-use config::S3Config;
+use std::io;
 
-use std::sync::mpsc::{channel};
+use std::sync::mpsc::channel;
 use tunnel::*;
-use messages::*;
 
 macro_rules! shell {
     (run => $cmd: expr, [ $($arg: expr ), * ] ) => ({
@@ -47,7 +47,11 @@ macro_rules! delete_files {
     }
 }
 
-pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_name: &str) -> io::Result<TunnelPipes> {
+pub fn create_clients(is_server: bool,
+                      cfg: S3Config,
+                      writer_name: &str,
+                      reader_name: &str)
+                      -> io::Result<TunnelPipes> {
     let bucket_name = cfg.bucket_name;
     let bucket_prefix = cfg.bucket_prefix;
 
@@ -62,9 +66,9 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
     let reader_name: String = reader_name.into();
     let writer_name: String = writer_name.into();
 
-    thread::spawn(move|| {
+    thread::spawn(move || {
         if is_server {
-            delete_files!( bucket_name, bucket_prefix, vec![&reader_name, &writer_name]);
+            delete_files!(bucket_name, bucket_prefix, vec![&reader_name, &writer_name]);
         }
         let reader = format!("s3://{}/{}/{}", bucket_name, bucket_prefix, reader_name);
         let bucket_place = format!("s3://{}/{}/", bucket_name, bucket_prefix);
@@ -95,11 +99,13 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                     }
                 }
             }
+            const NO_SUCH_KEY: i32 = 12;
+            const SUCCESS: i32 = 0;
 
             let _ = shell!(run => "s3cmd", ["get", &reader, "--force"])
                 .and_then(|status| {
                     match status.code() {
-                        Some(0) => {
+                        Some(SUCCESS) => {
                             use std::fs::File;
                             use std::io::Read;
                             File::open(&reader_name)
@@ -118,7 +124,7 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                                         })
                                 })
                         }
-                        Some(12) => {
+                        Some(NO_SUCH_KEY) => {
                             // TODO: remove NoFile
                             let _ = reader_sender.send(ReadCommand::NoFile).unwrap();
                             //sleep(Duration::from_millis(2000));
@@ -136,8 +142,8 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
     });
 
 
-    Ok(TunnelPipes{
-        writer: writer_sender,
-        reader: reader_receiver,
-    })
+    Ok(TunnelPipes {
+           writer: writer_sender,
+           reader: reader_receiver,
+       })
 }
