@@ -1,3 +1,7 @@
+use aws_sdk_rust::aws::s3::object::{GetObjectRequest, PutObjectRequest};
+use config::S3Config;
+use messages::*;
+use serde_yaml;
 /**
  * File: src/s3tunnel.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
@@ -6,15 +10,11 @@
  * Last Modified By: Anicka Burova <anicka.burova@gmail.com>
  */
 
-use std::io::{self};
-use config::S3Config;
-use serde_yaml;
+use std::io;
 
-use std::sync::mpsc::{channel};
+use std::sync::mpsc::channel;
 
 use tunnel::*;
-use messages::*;
-use aws_sdk_rust::aws::s3::object::{ GetObjectRequest, PutObjectRequest};
 
 macro_rules! delete_files {
     ($client: ident, $bucket_name: ident, $bucket_prefix: ident, $files: expr) => {
@@ -31,19 +31,20 @@ macro_rules! delete_files {
     }
 }
 
-pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_name: &str) -> io::Result<TunnelPipes> {
+pub fn create_clients(is_server: bool,
+                      cfg: S3Config,
+                      writer_name: &str,
+                      reader_name: &str)
+                      -> io::Result<TunnelPipes> {
     // create connection to s3
     let access_key = cfg.access_key;
     let bucket_name = cfg.bucket_name;
     let bucket_prefix = cfg.bucket_prefix;
     let bucket_location = cfg.bucket_location;
     let secret_key = cfg.secret_key;
-    use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider,ParametersProvider};
+    use aws_sdk_rust::aws::common::credentials::{DefaultCredentialsProvider, ParametersProvider};
     // Create s3 connection
-    ParametersProvider::with_parameters(
-        access_key,
-        secret_key,
-        None)
+    ParametersProvider::with_parameters(access_key, secret_key, None)
         .and_then(|credentials| {
             // Credentials to connect to the s3 cloud
             info!("Creating credentials");
@@ -63,26 +64,26 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             use aws_sdk_rust::aws::common::region::Region;
             Region::from_str(&bucket_location)
                 .and_then(|region| {
-                    use aws_sdk_rust::aws::s3::endpoint::{Endpoint, Signature};
-                    // endpoint can be cloned so just one is enough to create
-                    Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
-                })
+                              use aws_sdk_rust::aws::s3::endpoint::{Endpoint, Signature};
+                              // endpoint can be cloned so just one is enough to create
+                              Ok(Endpoint::new(region, Signature::V4, None, None, None, None))
+                          })
                 .and_then(|endpoint| {
-                    use aws_sdk_rust::aws::s3::s3client::S3Client;
-                    Ok((     S3Client::new(provider, endpoint)
+                              use aws_sdk_rust::aws::s3::s3client::S3Client;
+                              Ok((     S3Client::new(provider, endpoint)
                             //,S3Client::new(provider2, endpoint)
                             ,bucket_name
                             ,bucket_prefix))
-                })
+                          })
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
         })
         .map(|a| {
-            info!("S3 connection created");
-            a
-        })
+                 info!("S3 connection created");
+                 a
+             })
         .and_then(|(client, bucket_name, bucket_prefix)| {
-            let (writer_sender, writer_receiver) = channel::<WriteCommand>();
-            let (reader_sender, reader_receiver) = channel::<ReadCommand>();
+            let (writer_sender, writer_receiver) = channel::<TunnelPipeData>();
+            let (reader_sender, reader_receiver) = channel::<TunnelPipe>();
 
             use std::thread;
             info!("Reading data from '{}'", reader_name);
@@ -91,9 +92,12 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             let reader_name: String = reader_name.into();
             let writer_name: String = writer_name.into();
 
-            thread::spawn(move|| {
+            thread::spawn(move || {
                 if is_server {
-                    delete_files!(client, bucket_name, bucket_prefix, vec![&reader_name, &writer_name]);
+                    delete_files!(client,
+                                  bucket_name,
+                                  bucket_prefix,
+                                  vec![&reader_name, &writer_name]);
                 }
                 let mut reader = GetObjectRequest::default();
                 reader.bucket = bucket_name.clone();
@@ -126,13 +130,13 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
                             let stream: Vec<Message> = serde_yaml::from_str(text).unwrap();
 
                             let _ = reader_sender.send(ReadCommand::Read(stream)).unwrap();
-                            //sleep(Duration::from_millis(800));
+                            // sleep(Duration::from_millis(800));
                         }
                         Err(_) => {
                             let _ = reader_sender.send(ReadCommand::NoFile).unwrap();
                             // if the file is missing, just wait until it is created
-                            //info!("{} not found", reader_name);
-                            //sleep(Duration::from_millis(2000));
+                            // info!("{} not found", reader_name);
+                            // sleep(Duration::from_millis(2000));
                         }
                     }
 
@@ -141,12 +145,9 @@ pub fn create_clients(is_server: bool, cfg: S3Config, writer_name: &str, reader_
             });
 
 
-            Ok(TunnelPipes{
-                writer: writer_sender,
-                reader: reader_receiver,
-            })
+            Ok(TunnelPipes {
+                   writer: writer_sender,
+                   reader: reader_receiver,
+               })
         })
 }
-
-
-

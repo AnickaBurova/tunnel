@@ -36,14 +36,17 @@ macro_rules! wait_little {
 
 #[macro_use]
 mod tools;
+mod validator;
 mod config;
-mod messages;
-mod s3tunnel;
-mod s3tunnel_cmd;
+// mod messages;
+// mod s3tunnel;
+// mod s3tunnel_cmd;
+mod tunnel_interface;
+mod proxy_tunnel;
 mod tunnel;
-mod server;
-mod client;
-mod connection;
+// mod server;
+// mod client;
+// mod connection;
 mod master;
 
 use clap::{ArgMatches, SubCommand};
@@ -77,27 +80,30 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
     };
     let file_name = matches.value_of("tunnel-file-name").unwrap();
     let files = (format!("{}.in", file_name), format!("{}.out", file_name));
-    let (writer_name, reader_name) = match (is_server, files) {
-        (true, (w, r)) => (w, r),
-        (false, (r, w)) => (w, r),
+    let (file_in, file_out) = match (is_server, files) {
+        (true, (i, o)) => (i, o),
+        (false, (o, i)) => (i, o),
     };
     load_config()
         .and_then(|cfg| {
             let tunnel_api = &matches.value_of("tunnel-api").unwrap();
-            match tunnel_api {
-                &"s3cmd" => {
-                    s3tunnel_cmd::create_clients(is_server, cfg, &writer_name, &reader_name)
-                }
-                _ => s3tunnel::create_clients(is_server, cfg, &writer_name, &reader_name),
-            }
+            proxy_tunnel::create(file_in, file_out)
+            //match tunnel_api {
+
+                //&"s3cmd" => {
+                    //s3tunnel_cmd::create_clients(is_server, cfg, &writer_name, &reader_name)
+                //}
+                //_ => s3tunnel::create_clients(is_server, cfg, &writer_name, &reader_name),
+            //}
         })
-        .and_then(|tunnel_pipes| tunnel::run(is_server, tunnel_pipes))
-        .and_then(|tunnel| match mode {
-                      Mode::Master => master::run(tunnel),
-                      Mode::Server(port, client, client_port) => {
-                          server::run(port, client, client_port, tunnel)
-                      }
-                      Mode::Client => client::run(tunnel),
+        .and_then(|(input, output)| tunnel::create(input, output))
+        .and_then(|(input, output)| match mode {
+                      Mode::Master => master::create(input, output),
+                      _ => Ok(()),
+                      //Mode::Server(port, client, client_port) => {
+                          //server::run(port, client, client_port, input, output)
+                      //}
+                      //Mode::Client => client::run(input, output),
                   })
 }
 

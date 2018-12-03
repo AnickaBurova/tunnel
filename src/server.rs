@@ -1,3 +1,11 @@
+use connection::{manage_clients, run_connection};
+use rustyline::Editor;
+
+use rustyline::error::ReadlineError;
+use std::io;
+
+use std::sync::{Arc, Mutex};
+use std::thread;
 /**
  * File: src/server.rs
  * Author: Anicka Burova <anicka.burova@gmail.com>
@@ -8,18 +16,10 @@
 
 
 use tunnel::{Tunnel, WriterData};
-use std::io::{self};
-use connection::{manage_clients, run_connection};
-use std::thread;
 
-use rustyline::error::ReadlineError;
-use rustyline::Editor;
-
-use std::sync::{Arc, Mutex};
-
-pub fn run(port: u16, client_ip: String, client_port: u16, tunnel: Tunnel) -> io::Result<()>{
-    use std::net::{TcpListener};
-    let address = format!("0.0.0.0:{}",port);
+pub fn run(port: u16, client_ip: String, client_port: u16, tunnel: Tunnel) -> io::Result<()> {
+    use std::net::TcpListener;
+    let address = format!("0.0.0.0:{}", port);
     info!("Creating server on: {}", address);
     let client_ip = {
         Arc::new(Mutex::new(client_ip))
@@ -40,9 +40,9 @@ pub fn run(port: u16, client_ip: String, client_port: u16, tunnel: Tunnel) -> io
         let client_ip = client_ip_thread;
         let client_port = client_port_thread;
         TcpListener::bind(address)
-            .and_then(move|listener| {
+            .and_then(move |listener| {
                 info!("Waiting for connection, going to sleep.");
-                for (id, socket) in listener .incoming().enumerate() {
+                for (id, socket) in listener.incoming().enumerate() {
                     info!("Got connection {}", id);
                     let id = (id + 1) as u64;
                     let tunnel_writer = tunnel_writer.clone();
@@ -51,13 +51,18 @@ pub fn run(port: u16, client_ip: String, client_port: u16, tunnel: Tunnel) -> io
                         let client_ip = client_ip.lock().unwrap();
                         let client_port = client_port.lock().unwrap();
 
-                        let _ = tunnel_writer.send(WriterData::Connect(id, (*client_ip).clone(), *client_port)).unwrap();
+                        let _ = tunnel_writer
+                            .send(WriterData::Connect(id, (*client_ip).clone(), *client_port))
+                            .unwrap();
                     }
                     socket
                         .and_then(|socket| {
-                            run_connection( tunnel_writer, id, client_state_sender, socket);
-                            Ok(())
-                        })
+                                      run_connection(tunnel_writer,
+                                                     id,
+                                                     client_state_sender,
+                                                     socket);
+                                      Ok(())
+                                  })
                         .unwrap();
 
                     info!("Closing connection {}", id);
@@ -87,7 +92,7 @@ fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
                 let args: Vec<&str> = line.split(char::is_whitespace).collect();
                 let parser = create_parser();
                 match parser.get_matches_from_safe(args) {
-                    Ok(matches) =>
+                    Ok(matches) => {
                         match matches.subcommand_name() {
                             Some("connect") => {
                                 let matches = matches.subcommand_matches("connect").unwrap();
@@ -97,11 +102,12 @@ fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
                                 let mut client_port = client_port.lock().unwrap();
                                 let port = value_t!(matches, "port", u16).unwrap();
                                 *client_port = port;
-                            },
+                            }
                             _ => {
                                 println!("Unknown command");
                             }
-                        },
+                        }
+                    }
                     Err(e) => {
                         println!("{}", e.message);
                     }
@@ -109,15 +115,15 @@ fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
             }
             Err(ReadlineError::Interrupted) => {
                 info!("CTRL-C");
-                break
-            },
+                break;
+            }
             Err(ReadlineError::Eof) => {
                 info!("CTRL-D");
-                break
-            },
+                break;
+            }
             Err(err) => {
                 error!("Error: {:?}", err);
-                break
+                break;
             }
         }
     }
@@ -126,15 +132,9 @@ fn prompt(client_ip: Arc<Mutex<String>>, client_port: Arc<Mutex<u16>>) {
 
 }
 
-use std::str::{self};
 
-fn is_val<T: str::FromStr>(x: String) -> Result<(), String> {
-     x.parse::<T>()
-         .and_then(|_| Ok(()))
-         .or_else(|_| Err(format!("Cannot parse {}", x)))
-}
-
-use clap::{App};
+use clap::App;
+use validator::is_val;
 
 fn create_parser() -> App<'static, 'static> {
     use clap::{Arg, AppSettings, SubCommand};
@@ -144,21 +144,19 @@ fn create_parser() -> App<'static, 'static> {
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .setting(AppSettings::NoBinaryName)
         .subcommand(SubCommand::with_name("connect")
-                    .about("Connect to the address.")
-                    .arg(Arg::with_name("ip")
-                         .help("ip address to connect to")
-                         .index(1)
-                         .required(true)
-                         )
-                    .arg(Arg::with_name("port")
-                         .help("port to listen on this machine")
-                         .index(2)
-                         .required(true)
-                         .validator(is_val::<u16>)
-                         )
-                    )
-        //.arg(Arg::with_name("tunnel-file-name")
-            //.help("Name of the files to use for transfer data: tunnel.in tunnel.out, this is just the name, not the extension.")
-            //.long("tunnel-file-name")
-            //.default_value("tunnel"))
+                        .about("Connect to the address.")
+                        .arg(Arg::with_name("ip")
+                                 .help("ip address to connect to")
+                                 .index(1)
+                                 .required(true))
+                        .arg(Arg::with_name("port")
+                                 .help("port to listen on this machine")
+                                 .index(2)
+                                 .required(true)
+                                 .validator(is_val::<u16>)))
+    // arg(Arg::with_name("tunnel-file-name")
+    // help("Name of the files to use for transfer data: tunnel.in tunnel.out, this
+    // is just the name, not the extension.")
+    // long("tunnel-file-name")
+    // default_value("tunnel"))
 }
