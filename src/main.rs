@@ -36,6 +36,8 @@ macro_rules! wait_little {
 
 #[macro_use]
 mod tools;
+#[macro_use]
+mod unique_id;
 mod validator;
 mod config;
 // mod messages;
@@ -45,7 +47,7 @@ mod tunnel_interface;
 mod proxy_tunnel;
 mod tunnel;
 // mod server;
-// mod client;
+mod client;
 // mod connection;
 mod master;
 
@@ -103,7 +105,7 @@ fn s3run(matches: &ArgMatches) -> io::Result<()> {
                       //Mode::Server(port, client, client_port) => {
                           //server::run(port, client, client_port, input, output)
                       //}
-                      //Mode::Client => client::run(input, output),
+                      Mode::Client => client::run(input, output),
                   })
 }
 

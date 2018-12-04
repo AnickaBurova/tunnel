@@ -13,9 +13,10 @@
 
 use std::io;
 use std::sync::mpsc::{Sender, Receiver, channel};
+use unique_id::ID;
 
 // Individual connections have a unique id
-type ConnectionID = u64;
+type ConnectionID = ID;
 // Individual connections have an address where to connect
 type ConnectionAddress = String;
 // Data received from the tunnel
@@ -27,8 +28,21 @@ pub enum Message {
     Connect(ConnectionID, ConnectionAddress),
     /// Disconnect to stop the communication
     Disconnect(ConnectionID),
+    /// Error message from connection
+    Error(ConnectionID, String),
     /// Data to pass is an arbitrary data over the communication
     Data(ConnectionID, Data),
+}
+
+impl Message {
+    // Get the connection from the message
+    pub fn get_id(&self) -> ConnectionID {
+        match self {
+            &Message::Connect(id, _) => id,
+            &Message::Disconnect(id) => id,
+            &Message::Data(id, _) => id,
+        }
+    }
 }
 
 // Input from the tunnel
