@@ -172,5 +172,10 @@ fn main() {
             .get_matches();
     let _ = log4rs::init_file(&matches.value_of("log-config").unwrap(), Default::default())
         .unwrap();
-    let _ = s3run(&matches).unwrap();
+    match s3run(&matches) {
+        Ok(_) => (),
+        Err(err) => {
+            eprintln!("{}", err);
+        }
+    }
 }
